@@ -8,13 +8,15 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/dsh-mobile-harness"><img alt="npm" src="https://img.shields.io/npm/v/dsh-mobile-harness?color=4c8dff" /></a>
   <img alt="license" src="https://img.shields.io/badge/license-MIT-3ddc84" />
-  <img alt="platform" src="https://img.shields.io/badge/platform-Android%20%7C%20Web-3ddc84" />
+  <img alt="platform" src="https://img.shields.io/badge/platform-Android%20App%20%7C%20Web%20(iOS%20%7C%20HarmonyOS)-3ddc84" />
   <img alt="dsh" src="https://img.shields.io/badge/DeepSeek%20Harness-%E2%89%A5%200.2.1--rc.3-6b5bff" />
 </p>
 
 ![面板：一个开关 + 三张卡](assets/panel.png)
 
 > 电脑端面板：一个总开关，下面三张卡——连接 / 网络入口 / 设备准入。左：开着；中：关着；右：Cloudflare 隧道正在下载、建立。
+
+**下载**：插件（电脑端）→ [npm](https://www.npmjs.com/package/dsh-mobile-harness) 或 [plugin-v1.0.2 离线包](https://github.com/afeack/dsh-mobile-harness/releases/tag/plugin-v1.0.2)；手机 App（Android，可选）→ [v1.0.0 APK](https://github.com/afeack/dsh-mobile-harness/releases/tag/v1.0.0)。两者分开发布，版本各自独立。
 
 ---
 
