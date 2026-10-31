@@ -31,19 +31,6 @@ DSH Mobile Harness 给 DSH 加一页「远程访问」：一个网关、一个�
 
 不是另开一个账号，是**同一台电脑、同一个会话**：上下文、工具、文件都还是电脑上那份。
 
-## 和 dsh-pocket 的区别
-
-同一件事的另一个实现（2.6k star）。只列差异，没有贬低的意思。
-
-| | dsh-pocket | DSH Mobile Harness |
-| --- | --- | --- |
-| 手机端形态 | 浏览器 / WebView | 浏览器 + **可选的原生 APK**（4 MB） |
-| 接入方式 | 局域网 / Cloudflare 公网 | **外部隧道（SakuraFrp）/ Cloudflare 快速隧道 / 仅本机 / Tailscale** |
-| 首次连接 | 密码 | 密码 + **6 位配对码两端核对** |
-| 谁可以连 | — | **设备准入：在线上限、待同意队列、移除 / 拉黑** |
-| 反向控制 | — | 读屏 + 点按（已实现，1.0 默认隐藏） |
-| 许可 | GPL-2.0 | MIT |
-
 ## 功能
 
 ### 电脑端面板
@@ -218,13 +205,11 @@ ANDROID_HOME=<你的 SDK> JAVA_HOME=<你的 JDK17> ./gradlew assembleDebug
 
 ## 开发笔记
 
-开发过程中的中文记录（交接指南、设备准入实施计划、验收清单、方案对比）目前还留在本地，没进这个仓库——里面混着本机路径和真实的隧道地址，需要先脱敏。等清理完会作为 `docs/` 补进来；在那之前，代码和本 README 是唯一准绳。
+开发过程中的中文记录（交接指南、设备准入实施计划、验收清单）目前还留在本地，没进这个仓库——里面混着本机路径和真实的隧道地址，需要先脱敏。等清理完会作为 `docs/` 补进来；在那之前，代码和本 README 是唯一准绳。
 
 ## 致谢
 
 - [DeepSeek Harness](https://github.com/deepseek-ai)：宿主。
-- [dsh-pocket](https://github.com/shaobeichen/dsh-pocket)：同赛道对手，对比与灵感来源。
-- [dsh-Go](https://github.com/ccch1mneyyy/dsh-Go)：配对码这个交互是从它的「两端核对」偷师的（只抄了思路，没有代码）。
 - [jsQR](https://github.com/cozmo/jsQR)、[Capacitor](https://capacitorjs.com/)、[cloudflared](https://github.com/cloudflare/cloudflared)。
 
 ## License
