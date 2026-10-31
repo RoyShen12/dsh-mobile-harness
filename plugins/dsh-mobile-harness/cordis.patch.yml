@@ -1,0 +1,4 @@
+- insert:
+    - id: dsh-mobile-harness
+      name: dsh-mobile-harness
+      config: {}

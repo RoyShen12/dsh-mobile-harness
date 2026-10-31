@@ -1,0 +1,9 @@
+{
+  "//": "Copy to tools/remote-config.json to make these the defaults. Command-line args win.",
+  "//proxyPort": "Any free loopback port; the launcher auto-picks another if Windows reserved it (EACCES) or it is busy.",
+  "tunnel": "tailscale",
+  "proxyPort": 64700,
+  "secureCookie": false,
+  "cloudflareConfig": "C:\\Users\\<you>\\.cloudflared\\config.yml",
+  "publicHostname": "dsh.example.com"
+}

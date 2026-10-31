@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Mobile Harness</string>
+    <string name="title_activity_main">DSH Mobile Harness</string>
+    <string name="package_name">com.dsh.remote</string>
+    <string name="custom_url_scheme">com.dsh.remote</string>
+    <string name="agent_service_label">DSH Mobile Harness（让电脑看屏幕、点按钮）</string>
+    <string name="agent_service_description">打开后，电脑上的 agent 可以读取当前屏幕的文字并点按、输入。支付、银行、系统设置一律拒绝；只在电脑面板「手机协助」开着时生效，随时可以在系统设置里关掉。</string>
+</resources>

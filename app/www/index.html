@@ -1,0 +1,793 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta name="theme-color" content="#0f1115" />
+  <title>DSH Mobile Harness</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0f1115; --panel:#171a20; --line:#2a2f39; --text:#e8eaee; --muted:#98a0ad; --accent:#4c8dff; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
+    body { display: flex; flex-direction: column; min-height: 100vh; padding: calc(28px + env(safe-area-inset-top)) 22px calc(22px + env(safe-area-inset-bottom)); }
+    .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 26px; }
+    .brandIcon { width: 40px; height: 40px; flex: none; border-radius: 12px; background: #2F6BFF; display: flex; align-items: center; justify-content: center; }
+    .brandIcon img { width: 25px; height: 25px; filter: invert(1); }
+    .brand h1 { margin: 0; font-size: 19px; font-weight: 650; }
+    .brand p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+    label { display: flex; flex-direction: column; gap: 7px; font-size: 12px; color: var(--muted); }
+    input[type="url"], input[type="password"] { width: 100%; border: 1px solid var(--line); background: #101319; color: var(--text); border-radius: 10px; padding: 12px 13px; font-size: 15px; font-family: inherit; outline: none; }
+    input:focus { border-color: var(--accent); }
+    /* Checkbox first, label after, flush against the left edge (a column-direction parent used to
+       center these two switches: flex-direction has to be reset explicitly). */
+    .row { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 9px; font-size: 12px; color: var(--muted); text-align: left; }
+    .row input { flex: none; margin: 0; accent-color: var(--accent); width: 16px; height: 16px; }
+    button { border: 0; border-radius: 12px; padding: 14px; font-size: 16px; font-weight: 650; color: #06101f; background: var(--accent); }
+    button:active { transform: scale(.99); }
+    button:disabled { opacity: .6; }
+    button.secondary { background: transparent; color: var(--muted); border: 1px solid var(--line); font-size: 13px; padding: 11px; font-weight: 500; }
+    .hint { font-size: 11.5px; line-height: 1.7; color: var(--muted); margin: 18px 2px 0; }
+    .err { font-size: 12px; color: #ff8a70; min-height: 16px; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: #4cd07d; display: inline-block; margin-right: 6px; }
+    .scan-row { display: flex; gap: 10px; }
+    .scan-row button { flex: 1; font-size: 13px; padding: 12px 8px; font-weight: 600; }
+    .scan-status { font-size: 11.5px; line-height: 1.5; color: var(--muted); min-height: 16px; }
+    .modes { display: flex; gap: 8px; }
+    .modes button { flex: 1 1 0; min-width: 0; padding: 9px 4px; font-size: 12px; font-weight: 600; border-radius: 10px; background: #101319; border: 1px solid var(--line); color: var(--muted); }
+    .modes button.on { background: rgba(76, 141, 255, .16); border-color: var(--accent); color: #cfe0ff; }
+    .mode-hint { margin: -2px 0 0; font-size: 11.5px; line-height: 1.65; color: var(--muted); min-height: 16px; }
+    /* Full-screen camera viewfinder: the QR only has to sit in the frame, no shutter tap. */
+    .scanner { position: fixed; inset: 0; z-index: 30; background: #000; display: flex; flex-direction: column; }
+    .scanner video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
+    .scanner-frame { position: absolute; left: 50%; top: 44%; width: 64vw; height: 64vw; max-width: 330px; max-height: 330px; transform: translate(-50%, -50%); border-radius: 22px; box-shadow: 0 0 0 200vmax rgba(0, 0, 0, .55); }
+    .scanner-frame::before, .scanner-frame::after { content: ""; position: absolute; width: 34px; height: 34px; border: 3px solid #4c8dff; }
+    .scanner-frame::before { left: -1px; top: -1px; border-right: 0; border-bottom: 0; border-top-left-radius: 22px; }
+    .scanner-frame::after { right: -1px; bottom: -1px; border-left: 0; border-top: 0; border-bottom-right-radius: 22px; }
+    .scanner-top { position: absolute; left: 0; right: 0; top: calc(16px + env(safe-area-inset-top)); text-align: center; font-size: 13px; color: rgba(255, 255, 255, .92); text-shadow: 0 1px 6px rgba(0, 0, 0, .8); }
+    .scanner-bar { position: absolute; left: 0; right: 0; bottom: calc(16px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 0 24px; }
+    .scanner-tip { font-size: 12.5px; line-height: 1.6; color: #eef1f6; text-shadow: 0 1px 6px rgba(0, 0, 0, .8); text-align: center; }
+    .scanner-bar button { width: 100%; max-width: 320px; background: rgba(24, 28, 36, .8); color: #e8eaee; border: 1px solid rgba(255, 255, 255, .18); }
+    .divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 11px; }
+    .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+    .overlay { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(9, 11, 15, .94); }
+    [hidden] { display: none !important; }
+    .overlay[hidden] { display: none; }
+    .overlayCard { width: 100%; max-width: 330px; display: flex; flex-direction: column; align-items: stretch; gap: 12px; padding: 26px 20px; text-align: center; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; }
+    .overlayCard h2 { margin: 0; font-size: 17px; font-weight: 650; }
+    .overlayCard p { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--muted); }
+    .overlayCard .countdown { font-size: 12px; color: #ffca6a; font-variant-numeric: tabular-nums; min-height: 16px; }
+    .spinner { width: 26px; height: 26px; margin: 0 auto 2px; border-radius: 50%; border: 2.5px solid #2f3744; border-top-color: var(--accent); animation: dshSpin 900ms linear infinite; }
+    @keyframes dshSpin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="brand">
+    <div class="brandIcon"><img id="brandLogo" src="vendor/harness.svg" alt="" /></div>
+    <div>
+      <h1>DSH Mobile Harness</h1>
+      <p><span class="dot"></span>DeepSeek Harness · 手机客户端</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="modes" id="modes">
+      <button type="button" data-mode="tailscale">Tailscale</button>
+      <button type="button" data-mode="frp">SakuraFrp</button>
+      <button type="button" data-mode="cloudflare">Cloudflare</button>
+      <button type="button" data-mode="lan">局域网</button>
+    </div>
+    <p class="mode-hint" id="mode-hint"></p>
+    <label>服务器地址
+      <input id="url" type="url" inputmode="url" autocomplete="url" spellcheck="false" placeholder="https://frp-cat.com:12345/" />
+    </label>
+    <label>访问密码
+      <input id="password" type="password" autocomplete="current-password" placeholder="远程访问密码" />
+    </label>
+    <label class="row"><input id="remember" type="checkbox" checked />记住地址和密码（仅存本机）</label>
+    <label class="row"><input id="auto" type="checkbox" checked />保持登录（下次打开直接进入）</label>
+
+    <div class="divider">扫码登录</div>
+    <div class="scan-row">
+      <button id="scan-live" type="button" class="secondary">相机扫码</button>
+      <button id="scan-gallery" type="button" class="secondary">从相册选择</button>
+    </div>
+    <div class="scan-status" id="scan-status"></div>
+    <input id="qr-gallery" type="file" accept="image/*" hidden />
+
+    <div class="err" id="err"></div>
+    <button id="connect">打开 DeepSeek Harness</button>
+  </div>
+
+  <!-- 手机协助（P2）还没验收：电脑面板已隐藏这一块，App 首页也先藏起来。代码保留，验收时去掉 hidden 即可。 -->
+  <div class="card" style="margin-top:14px" hidden>
+    <div class="divider">让电脑看屏幕、点按钮</div>
+    <p class="hint" style="margin:0">打开「DSH Mobile Harness」的无障碍服务后，电脑上的 agent 才能读屏和点按；支付、银行、系统设置一律拒绝代操作。默认关闭，随时可以关掉。</p>
+    <div class="scan-row">
+      <button id="agent-settings" type="button" class="secondary">打开无障碍设置</button>
+      <button id="agent-state" type="button" class="secondary">检查状态</button>
+    </div>
+    <div class="scan-status" id="agent-status"></div>
+  </div>
+
+  <p class="hint">
+    「相机扫码」会打开取景框，把电脑上的二维码放进去就自动识别，不用按快门。二维码只含地址（截图外发也进不来密码）：识别后会用这台手机记住的密码自动登录，第一次仍需手填一次密码。<br />
+    密码在本机校验，通过后由电脑弹出配对码，两边数字一致才算登录成功。<br />
+    手动填地址和密码同理。首次连接会提示证书不受信任（中转的自动证书），点「高级 → 继续前往」即可。
+  </p>
+
+  <!-- Camera viewfinder: the page decodes frames itself, so a QR only has to sit in the frame. -->
+  <div class="scanner" id="scanner" hidden>
+    <video id="scanner-video" playsinline muted autoplay></video>
+    <div class="scanner-frame"></div>
+    <div class="scanner-top">把电脑上的二维码放进框里</div>
+    <div class="scanner-bar">
+      <div class="scanner-tip" id="scanner-tip">正在打开相机…</div>
+      <button id="scanner-cancel" type="button">取消</button>
+    </div>
+  </div>
+
+  <div class="overlay" id="pending" hidden>
+    <div class="overlayCard">
+      <div class="spinner"></div>
+      <h2 id="pending-title">等待电脑确认</h2>
+      <p id="pending-label"></p>
+      <div id="pending-code" hidden style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:30px;font-weight:600;letter-spacing:.24em;color:#e8b339;margin:14px 0 2px"></div>
+      <p id="pending-hint">电脑上会弹出配对码窗口：两边数字一致再点「允许」。<br />请求 5 分钟内有效，超时需重新输入密码。</p>
+      <p class="countdown" id="pending-countdown"></p>
+      <button id="pending-cancel" type="button" class="secondary">返回</button>
+    </div>
+  </div>
+
+  <script src="vendor/jsQR.js"></script>
+  <script>
+    (function () {
+      var DEFAULT_URL = 'https://frp-cat.com:12345/'
+      var url = document.getElementById('url')
+      var password = document.getElementById('password')
+      var remember = document.getElementById('remember')
+      var auto = document.getElementById('auto')
+      var err = document.getElementById('err')
+      var connectButton = document.getElementById('connect')
+      // Which address the text currently sitting in the password field was meant for.
+      var fieldBase = ''
+      // The QR carries a one-time ticket (?t=), never the password: the desktop burns it on first
+      // use, so a screenshot is worthless. The app trades it in for a session, which is why a scan
+      // works even when this phone has no password stored at all (0.5.6).
+      var scanTicket = ''
+      var usedTicket = ''
+      var ticketAttempt = false
+      // One free retry without the ticket: an older desktop build answers "wrong password" to a
+      // ticket it has never heard of, and the remembered password still gets us in.
+      var lastAttemptPw = ''
+      var ticketFallbackTried = false
+
+      // The native layer keeps the last address/password that actually opened a session, so the
+      // form still prefills when Android clears WebView storage (upgrade, "clear data", WebView
+      // reset). localStorage stays the primary copy; the native one is only a fallback.
+      function nativeSaved() {
+        try {
+          if (window.DshApp && typeof window.DshApp.loadCredentials === 'function') {
+            var raw = window.DshApp.loadCredentials()
+            if (raw) return JSON.parse(raw) || {}
+          }
+        } catch (e) {}
+        return {}
+      }
+
+      function savedPassword() {
+        try {
+          var local = localStorage.getItem('dsh.password')
+          if (local) return local
+        } catch (e) {}
+        var native = nativeSaved()
+        return native.password || ''
+      }
+
+      function savedUrl() {
+        try {
+          var local = localStorage.getItem('dsh.url')
+          if (local) return local
+        } catch (e) {}
+        var native = nativeSaved()
+        return native.url || ''
+      }
+
+      // One password per phone, not per address: the gateway password is the same for every entrance
+      // of this machine, so a remembered one is reused for whatever address was scanned. Only a value
+      // the gateway already rejected for *this* address is withheld (0.5.5). 0.5.4 required an exact
+      // address match, which left the field empty after a Cloudflare tunnel restart — the quick-tunnel
+      // host changes every time.
+      function baseKey(raw) {
+        var value = String(raw || '').trim()
+        if (!value) return ''
+        try {
+          var parsed = new URL(/^https?:\/\//i.test(value) ? value : 'https://' + value)
+          var path = parsed.pathname || '/'
+          if (!path.endsWith('/')) path += '/'
+          return (parsed.origin + path).toLowerCase()
+        } catch (e) {
+          return value.toLowerCase()
+        }
+      }
+
+      function readLocal(key) {
+        try { return localStorage.getItem(key) || '' } catch (e) { return '' }
+      }
+
+      // '' only when nothing is remembered, or when this very address already rejected the password.
+      function savedPasswordFor(base) {
+        var remembered = savedPassword()
+        if (!remembered) return ''
+        var stale = readLocal('dsh.pwStale')
+        if (stale && base && baseKey(stale) === baseKey(base)) return ''
+        return remembered
+      }
+
+      // Drop the stored password (both copies). The address stays so the form still prefills it.
+      function forgetPassword(base) {
+        try {
+          localStorage.removeItem('dsh.password')
+          localStorage.removeItem('dsh.pwBase')
+        } catch (e) {}
+        try {
+          if (window.DshApp && typeof window.DshApp.saveCredentials === 'function') {
+            window.DshApp.saveCredentials(base || '', '', true, false)
+          }
+        } catch (e) {}
+      }
+
+      // The gateway said the password is wrong: remember that for this address, so the next scan
+      // asks for a fresh one instead of filling the same bad value again.
+      function markPasswordStale(base) {
+        var key = baseKey(base)
+        forgetPassword(base)
+        try {
+          if (key) localStorage.setItem('dsh.pwStale', key)
+          else localStorage.removeItem('dsh.pwStale')
+        } catch (e) {}
+      }
+
+      try {
+        var storedUrl = savedUrl()
+        var storedPassword = savedPasswordFor(storedUrl)
+        url.value = storedUrl || DEFAULT_URL
+        if (storedPassword) password.value = storedPassword
+        var autoFlag = null
+        try { autoFlag = localStorage.getItem('dsh.auto') } catch (e) {}
+        if (autoFlag === null) {
+          var nativeAuto = nativeSaved()
+          autoFlag = nativeAuto.auto === false ? '0' : null
+        }
+        if (autoFlag === '0') auto.checked = false
+      } catch (e) { url.value = DEFAULT_URL }
+
+      function normalize(raw) {
+        var value = String(raw || '').trim()
+        if (!value) throw new Error('请填写服务器地址')
+        if (!/^https?:\/\//i.test(value)) value = 'https://' + value
+        var parsed = new URL(value)
+        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') throw new Error('只支持 http/https')
+        if (!parsed.pathname.endsWith('/')) parsed.pathname += '/'
+        parsed.hash = ''
+        parsed.search = ''
+        return parsed.toString()
+      }
+
+      // The panel has four entries; the app accepts all four, so the page shows which one the
+      // typed address belongs to instead of letting the user guess (0.5.2).
+      var modesBar = document.getElementById('modes')
+      var modeHint = document.getElementById('mode-hint')
+      var MODES = {
+        tailscale: {
+          sample: 'https://my-pc.tailnet-xxxx.ts.net/',
+          hint: 'Tailscale：复制面板「网络入口 → Tailscale」里的地址；手机也要装 Tailscale 并登录同一个账号。'
+        },
+        frp: {
+          sample: 'https://frp-cat.com:12345/',
+          hint: 'SakuraFrp / 外部隧道：填面板里的外网地址（带端口）。这条隧道地址长期不变。'
+        },
+        cloudflare: {
+          sample: 'https://random-words-1234.trycloudflare.com/',
+          hint: 'Cloudflare：从面板「网络入口 → Cloudflare」复制这一轮的地址粘贴进来。电脑每次重启地址都会变，重启后要回来更新。'
+        },
+        lan: {
+          sample: 'http://192.168.1.10:64701/',
+          hint: '局域网：手机和电脑连同一个 Wi-Fi，填电脑的局域网地址（面板下方「网关监听」那行的 IP:64701）。'
+        }
+      }
+      var currentMode = ''
+
+      function detectMode(raw) {
+        var host = ''
+        try {
+          host = new URL(/^https?:\/\//i.test(String(raw || '').trim()) ? String(raw).trim() : 'https://' + String(raw || '').trim()).hostname.toLowerCase()
+        } catch (e) { return '' }
+        if (/\.(trycloudflare|cfargotunnel)\.com$/.test(host)) return 'cloudflare'
+        if (/\.ts\.net$/.test(host)) return 'tailscale'
+        if (host === 'frp-cat.com' || /\.frp-cat\.com$/.test(host)) return 'frp'
+        if (host === 'localhost' || host === '127.0.0.1') return 'lan'
+        if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) return 'lan'
+        return ''
+      }
+
+      function paintModes(mode) {
+        var buttons = modesBar.querySelectorAll('button')
+        for (var i = 0; i < buttons.length; i++) {
+          var on = buttons[i].getAttribute('data-mode') === mode
+          buttons[i].className = on ? 'on' : ''
+        }
+        var preset = MODES[mode]
+        modeHint.textContent = preset
+          ? preset.hint
+          : '四种入口都能连：选一个，把面板上对应的地址填进来。'
+        if (preset) url.placeholder = preset.sample
+      }
+
+      function pickMode(mode) {
+        currentMode = mode
+        paintModes(mode)
+        // The field is never rewritten: the placeholder shows the shape of the address the panel
+        // has for that entry, and the user pastes the real one.
+      }
+
+      var modeButtons = modesBar.querySelectorAll('button')
+      for (var mi = 0; mi < modeButtons.length; mi++) {
+        modeButtons[mi].addEventListener('click', function () {
+          pickMode(this.getAttribute('data-mode'))
+        })
+      }
+      url.addEventListener('input', function () {
+        var detected = detectMode(url.value)
+        if (detected && detected !== currentMode) {
+          currentMode = detected
+          paintModes(detected)
+        }
+      })
+      currentMode = detectMode(url.value)
+      paintModes(currentMode)
+
+      function setBusy(busy) {
+        connectButton.disabled = busy
+        connectButton.textContent = busy ? '正在验证…' : '打开 DeepSeek Harness'
+      }
+
+      function connect() {
+        err.textContent = ''
+        var base
+        try { base = normalize(url.value) } catch (e) { err.textContent = e.message; return }
+        var pw = password.value
+        var ticket = usedTicket
+        usedTicket = ''
+        ticketAttempt = !!ticket
+        lastAttemptPw = pw
+        if (ticket) ticketFallbackTried = false
+        try {
+          if (remember.checked) {
+            localStorage.setItem('dsh.url', base)
+            // A ticket login has no password to store; never let it blank the remembered one.
+            if (pw) {
+              localStorage.setItem('dsh.password', pw)
+              // Remember which address this password belongs to, and clear a stale mark: this
+              // attempt is the fresh one.
+              localStorage.setItem('dsh.pwBase', base)
+            }
+            localStorage.removeItem('dsh.pwStale')
+            localStorage.setItem('dsh.auto', auto.checked ? '1' : '0')
+          } else {
+            localStorage.removeItem('dsh.url')
+            localStorage.removeItem('dsh.password')
+            localStorage.removeItem('dsh.pwBase')
+            localStorage.setItem('dsh.auto', '0')
+          }
+        } catch (e) {}
+        // Mirror into the native store (the page cannot see it being wiped, the app can).
+        try {
+          var writable = window.DshApp && typeof window.DshApp.saveCredentials === 'function'
+          // Blanking both stores with an empty password would erase a working credential.
+          if (writable && !(remember.checked && !pw)) {
+            window.DshApp.saveCredentials(base, remember.checked ? pw : '', remember.checked, auto.checked)
+          }
+        } catch (e) {}
+        setBusy(true)
+        if (window.DshApp && typeof window.DshApp.connect === 'function') {
+          if (ticket) {
+            try {
+              window.DshApp.connect(base, pw, ticket)
+              return
+            } catch (e) {
+              /* an older app has no ticket argument: fall back to the password */
+            }
+          }
+          window.DshApp.connect(base, pw)
+          return
+        }
+        // No in-page fallback can sign this browser in any more: a session is granted only after
+        // the desktop confirmed the pairing code, and only the app can show that flow.
+        setBusy(false)
+        err.textContent = '请在 DSH Mobile Harness App 里连接（浏览器里无法完成配对码核对）'
+      }
+
+      var pendingPanel = document.getElementById('pending')
+      var pendingTitle = document.getElementById('pending-title')
+      var pendingLabel = document.getElementById('pending-label')
+      var pendingHint = document.getElementById('pending-hint')
+      var pendingCountdown = document.getElementById('pending-countdown')
+      var pendingCode = document.getElementById('pending-code')
+      var pendingTimer = null
+
+      var RESULT_TEXT = {
+        denied: '电脑端拒绝了这次连接。需要时请在面板点「允许」后重试。',
+        expired: '请求已超时（5 分钟）。请重新点击「打开 DeepSeek Harness」。',
+        'max-online': '在线设备数已达上限。请先在电脑面板移除或下线别的设备，再重试。',
+        'max-pending': '待确认的连接请求太多，请稍后再试。',
+        'too-many': '密码错误次数过多，请 5 分钟后再试。',
+        password: '密码不正确，请检查后重试。',
+        ticket: '这张二维码已经用过了（或超过 10 分钟）：回电脑面板重新扫一张，或在下面手填密码。',
+        blocked: '此设备已被拉黑（禁止登录），请在电脑「远程」面板解除黑名单后重试。',
+        host: '这个地址不在 App 支持的入口里：只支持 Tailscale(*.ts.net)、SakuraFrp(frp-cat.com)、Cloudflare(*.trycloudflare.com) 和局域网地址。',
+        failed: '密码不正确或无法连接，请检查密码 / 地址 / 网络后重试'
+      }
+
+      function hidePending() {
+        pendingPanel.hidden = true
+        if (pendingTimer) {
+          clearInterval(pendingTimer)
+          pendingTimer = null
+        }
+      }
+
+      function showPending(title, deviceLabel, hint, expiresAt) {
+        hidePending()
+        pendingTitle.textContent = title
+        pendingLabel.textContent = deviceLabel || ''
+        pendingHint.innerHTML = hint || ''
+        pendingCountdown.textContent = ''
+        pendingCode.textContent = ''
+        pendingCode.hidden = true
+        pendingPanel.hidden = false
+        var until = Number(expiresAt) || 0
+        if (!until) return
+        var tick = function () {
+          var left = Math.max(0, Math.ceil((until - Date.now()) / 1000))
+          var seconds = left % 60
+          pendingCountdown.textContent = '剩余 ' + Math.floor(left / 60) + ':' + (seconds < 10 ? '0' + seconds : seconds)
+        }
+        tick()
+        pendingTimer = setInterval(tick, 1000)
+      }
+
+      // First-time device: the gateway queued the request and the native layer polls it.
+      window.__dshConnectPending = function (label, expiresAt, code) {
+        setBusy(true)
+        err.textContent = ''
+        showPending('等待电脑确认', label ? '这台设备：' + label : '这台设备正在请求连接', '', expiresAt)
+        var digits = String(code || '').replace(/\s+/g, '')
+        if (digits) {
+          pendingCode.textContent = digits.replace(/(\d{3})(?=\d)/g, '$1 ')
+          pendingCode.hidden = false
+        }
+      }
+
+      window.__dshConnectResult = function (code) {
+        hidePending()
+        setBusy(false)
+        var wasTicket = ticketAttempt
+        ticketAttempt = false
+        if (code === 'ticket') {
+          err.textContent = RESULT_TEXT.ticket
+          return
+        }
+        if (code === 'password' && wasTicket) {
+          // A ticket the gateway never heard of means the desktop has not restarted into the new
+          // plugin yet. Do not blame the password (and never clear it): retry once the old way.
+          if (lastAttemptPw && !ticketFallbackTried) {
+            ticketFallbackTried = true
+            setStatus('这台电脑的 DSH 还没重启，先改用记住的密码登录…')
+            setTimeout(connect, 120)
+            return
+          }
+          err.textContent = '电脑上的 DSH 还没重启（网关还不认扫码票据）：去电脑上退出 DSH 再重新打开，或在下面手填一次密码。'
+          return
+        }
+        if (code === 'password' && !wasTicket) {
+          // The remembered password itself is wrong (the panel password was rotated). Drop it so the
+          // next scan/attempt asks for a fresh one instead of replaying the same 401.
+          var base = ''
+          try { base = normalize(url.value) } catch (e) { base = url.value }
+          markPasswordStale(base)
+          password.value = ''
+          password.focus()
+          err.textContent = '密码不对：这台手机记住的密码已经清掉了（电脑上可能改过密码），请重新输入一次。'
+          return
+        }
+        err.textContent = RESULT_TEXT[code] || RESULT_TEXT.failed
+      }
+
+      window.__dshConnectFailed = function () {
+        window.__dshConnectResult('failed')
+      }
+
+      window.__dshConnectBlacklisted = function () {
+        window.__dshConnectResult('blocked')
+      }
+
+      document.getElementById('pending-cancel').addEventListener('click', function () {
+        hidePending()
+        setBusy(false)
+        err.textContent = '已取消等待，可重新尝试连接'
+      })
+
+      var scanStatus = document.getElementById('scan-status')
+      function setStatus(text, isError) {
+        scanStatus.textContent = text || ''
+        scanStatus.style.color = isError ? '#ff8a70' : ''
+      }
+
+      function decodeImageElement(img) {
+        if (!window.jsQR) return null
+        var maxSide = Math.max(img.width, img.height)
+        var limits = [1600, 1200, 800, 600]
+        var sizes = []
+        for (var i = 0; i < limits.length; i += 1) {
+          if (limits[i] <= maxSide) sizes.push(limits[i])
+        }
+        if (sizes.length === 0) sizes.push(maxSide)
+        for (var j = 0; j < sizes.length; j += 1) {
+          var scale = sizes[j] / maxSide
+          var w = Math.max(1, Math.round(img.width * scale))
+          var h = Math.max(1, Math.round(img.height * scale))
+          var canvas = document.createElement('canvas')
+          canvas.width = w
+          canvas.height = h
+          var ctx = canvas.getContext('2d', { willReadFrequently: true })
+          ctx.drawImage(img, 0, 0, w, h)
+          var data = ctx.getImageData(0, 0, w, h)
+          var result = window.jsQR(data.data, w, h, { inversionAttempts: 'attemptBoth' })
+          if (result && result.data) return result.data
+        }
+        return null
+      }
+
+      function applyScannedPayload(text) {
+        var parsed
+        try { parsed = new URL(String(text || '')) } catch (e) { return false }
+        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false
+        // A code produced by an older build may still carry ?p=<password>. It is not a key any
+        // more: the address is all that is used, so a shared screenshot cannot log anyone in.
+        // ?t= is the one-time scan ticket: kept aside for the native login, stripped from the
+        // address so it never ends up in the field, history or a screenshot of this page.
+        scanTicket = parsed.searchParams.get('t') || ''
+        parsed.search = ''
+        parsed.hash = ''
+        if (!parsed.pathname.endsWith('/')) parsed.pathname += '/'
+        url.value = parsed.toString()
+        var detected = detectMode(url.value)
+        if (detected) {
+          currentMode = detected
+          paintModes(detected)
+        }
+        return parsed
+      }
+
+      // Runs after either scanner. A remembered password is reused for any address; only a value that
+      // already failed *here* is withheld, and a password typed by hand for a different address is
+      // cleared so it is never silently replayed (0.5.5).
+      function completeScan(text) {
+        var parsed = applyScannedPayload(text)
+        if (!parsed) {
+          setStatus('二维码内容不是可用的服务器地址', true)
+          return
+        }
+        var base = parsed.toString()
+        var ticket = scanTicket
+        scanTicket = ''
+        if (ticket) {
+          // A fresh scan needs no password: the desktop already vouched for this code. Send the
+          // remembered one anyway, so an older gateway (that does not know tickets yet) still
+          // signs in the usual way instead of answering 401.
+          usedTicket = ticket
+          fieldBase = baseKey(base)
+          password.value = savedPasswordFor(base)
+          setStatus('已识别 ' + parsed.host + '，用扫码票据登录…')
+          setTimeout(connect, 160)
+          return
+        }
+        var sameAddress = !!fieldBase && baseKey(base) === fieldBase
+        var remembered = savedPasswordFor(base)
+        var stale = readLocal('dsh.pwStale')
+        var staleHere = !!stale && baseKey(stale) === baseKey(base)
+        fieldBase = baseKey(base)
+        if (remembered) {
+          password.value = remembered
+          setStatus('已识别 ' + parsed.host + '，用本机记住的密码登录…')
+          setTimeout(connect, 260)
+          return
+        }
+        if (!sameAddress) password.value = ''
+        if (password.value) {
+          setStatus('已识别 ' + parsed.host + '，用刚填的密码登录…')
+          setTimeout(connect, 260)
+          return
+        }
+        password.focus()
+        if (staleHere) {
+          setStatus('已识别 ' + parsed.host + '。上次记住的密码不对（电脑上可能改过密码），已经清掉了：请重新输入一次，勾上「记住地址和密码」后下次扫码就会自动登录。', true)
+          return
+        }
+        setStatus('已识别 ' + parsed.host + '。这台手机还没存过密码：先填一次，勾上「记住地址和密码」后，以后扫码就会自动填并直接登录。', true)
+      }
+
+      function handleQrFile(file) {
+        if (!file) return
+        setStatus('正在识别二维码…')
+        var reader = new FileReader()
+        reader.onload = function () {
+          var img = new Image()
+          img.onload = function () {
+            var payload = decodeImageElement(img)
+            if (!payload) {
+              setStatus('没识别到二维码，换一张更清晰、只含二维码的图片试试', true)
+              return
+            }
+            completeScan(payload)
+          }
+          img.onerror = function () { setStatus('图片读取失败，请换一张', true) }
+          img.src = reader.result
+        }
+        reader.onerror = function () { setStatus('图片读取失败，请换一张', true) }
+        reader.readAsDataURL(file)
+      }
+
+      // ── live viewfinder ────────────────────────────────────────────────────────
+      // The video is decoded in-page (jsQR is already bundled), so the user just holds the QR
+      // inside the frame: no shutter button, no round-trip through the system camera app.
+      var scannerEl = document.getElementById('scanner')
+      var scannerVideo = document.getElementById('scanner-video')
+      var scannerTip = document.getElementById('scanner-tip')
+      var scanStream = null
+      var scanFrameRequest = 0
+      var scanLastAt = 0
+      var scanStopped = true
+      var scanCanvas = document.createElement('canvas')
+      var scanContext = scanCanvas.getContext('2d', { willReadFrequently: true })
+
+      function stopScanner() {
+        scanStopped = true
+        if (scanFrameRequest) {
+          cancelAnimationFrame(scanFrameRequest)
+          scanFrameRequest = 0
+        }
+        if (scanStream) {
+          try {
+            scanStream.getTracks().forEach(function (track) { track.stop() })
+          } catch (e) {}
+          scanStream = null
+        }
+        try { scannerVideo.srcObject = null } catch (e) {}
+        scannerEl.hidden = true
+      }
+
+      function scanTick(now) {
+        if (scanStopped) return
+        scanFrameRequest = requestAnimationFrame(scanTick)
+        // Eight decodes a second is plenty for a held phone and keeps the preview smooth.
+        if (now - scanLastAt < 120) return
+        scanLastAt = now
+        var vw = scannerVideo.videoWidth
+        var vh = scannerVideo.videoHeight
+        if (!vw || !vh || !window.jsQR || !scanContext) return
+        // Decode the square the frame draws over, not the whole preview: same area the user aims.
+        var side = Math.min(vw, vh) * 0.72
+        var sx = (vw - side) / 2
+        var sy = (vh - side) / 2
+        var target = 640
+        scanCanvas.width = target
+        scanCanvas.height = target
+        scanContext.drawImage(scannerVideo, sx, sy, side, side, 0, 0, target, target)
+        var pixels
+        try {
+          pixels = scanContext.getImageData(0, 0, target, target)
+        } catch (e) {
+          return
+        }
+        var hit = window.jsQR(pixels.data, target, target, { inversionAttempts: 'attemptBoth' })
+        if (!hit || !hit.data) return
+        stopScanner()
+        completeScan(hit.data)
+      }
+
+      function openScanner() {
+        setStatus('')
+        if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+          setStatus('这台手机不支持相机取景，请用「从相册选择」扫二维码', true)
+          return
+        }
+        scanStopped = false
+        scannerEl.hidden = false
+        scannerTip.textContent = '正在打开相机…'
+        var wanted = { audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } }
+        navigator.mediaDevices.getUserMedia(wanted).then(function (stream) {
+          if (scanStopped) {
+            stream.getTracks().forEach(function (track) { track.stop() })
+            return
+          }
+          scanStream = stream
+          scannerVideo.srcObject = stream
+          var play = scannerVideo.play()
+          if (play && typeof play.catch === 'function') play.catch(function () {})
+          scannerTip.textContent = '把电脑上的二维码放进框里，会自动识别'
+          scanLastAt = 0
+          scanFrameRequest = requestAnimationFrame(scanTick)
+        }).catch(function (error) {
+          stopScanner()
+          var name = (error && error.name) || ''
+          if (name === 'NotAllowedError' || name === 'SecurityError') {
+            setStatus('没有相机权限：在系统设置里允许「DSH Mobile Harness」使用相机，或改用「从相册选择」', true)
+          } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+            setStatus('没找到可用的相机，请用「从相册选择」扫二维码', true)
+          } else {
+            setStatus('相机打不开（可能被别的应用占用），请用「从相册选择」扫二维码', true)
+          }
+        })
+      }
+
+      document.getElementById('scan-live').addEventListener('click', openScanner)
+      document.getElementById('scanner-cancel').addEventListener('click', function () { stopScanner() })
+
+      function pick(input) {
+        input.value = ''
+        input.click()
+      }
+      document.getElementById('scan-gallery').addEventListener('click', function () { pick(document.getElementById('qr-gallery')) })
+      document.getElementById('qr-gallery').addEventListener('change', function (event) { handleQrFile(event.target.files && event.target.files[0]) })
+
+      connectButton.addEventListener('click', connect)
+
+      // Backgrounding the app must release the camera, or Android keeps the red dot on.
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) stopScanner()
+      })
+
+  var agentStatus = document.getElementById('agent-status')
+  document.getElementById('agent-settings').addEventListener('click', function () {
+    if (!window.DshApp || typeof window.DshApp.openAgentSettings !== 'function') {
+      agentStatus.textContent = '这个页面不在 App 里：直接去手机「设置 → 无障碍」找「DSH Mobile Harness」。'
+      return
+    }
+    window.DshApp.openAgentSettings()
+  })
+  document.getElementById('agent-state').addEventListener('click', function () {
+    if (!window.DshApp || typeof window.DshApp.agentState !== 'function') {
+      agentStatus.textContent = '读不到状态：这个页面不在 App 里。'
+      return
+    }
+    agentStatus.textContent = window.DshApp.agentState() === 'on'
+      ? '无障碍已开启：电脑可以读屏和点按了。'
+      : '无障碍还没开：点左边的按钮，在列表里打开「DSH Mobile Harness」。'
+  })
+
+      // Auto-connect (stay signed in): verify the saved password natively first; on failure the
+      // page stays and shows the inline error, so no second login page ever appears.
+      var isConfigRequest = /(?:^|[?&])config=1(?:&|$)/.test(location.search)
+      if (!isConfigRequest) {
+        try {
+          var autoUrl = savedUrl()
+          var autoPw = savedPasswordFor(autoUrl)
+          var autoFlag = localStorage.getItem('dsh.auto')
+          if (autoFlag === null) {
+            var nativeAuto = nativeSaved()
+            autoFlag = nativeAuto.auto === false ? '0' : '1'
+          }
+          if (autoUrl && autoPw && autoFlag !== '0' && window.DshApp && window.DshApp.connect) {
+            showPending('正在验证密码…', '', '正在与电脑建立安全连接…', 0)
+            window.DshApp.connect(normalize(autoUrl), autoPw)
+          }
+        } catch (e) {
+          /* fall back to the form */
+        }
+      }
+    })()
+  </script>
+</body>
+</html>

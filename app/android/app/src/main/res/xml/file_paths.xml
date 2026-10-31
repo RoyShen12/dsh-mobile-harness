@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <external-path name="my_images" path="." />
+    <!-- Downloads on Android 9 and older land in the app's external files dir. -->
+    <external-files-path name="downloads" path="Download/" />
+    <files-path name="files_downloads" path="Download/" />
+    <cache-path name="my_cache_images" path="." />
+</paths>
