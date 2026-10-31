@@ -2,6 +2,7 @@
 
 ## 1.0.1 — 2026-10-31
 - 面板「网络入口」把 Tailscale 排到最后，并直接标注「不推荐：走 DERP 中继时延迟高」；外部隧道与 Cloudflare 排前两位。
+- 发布到 npm：`npm i dsh-mobile-harness`（或 `dsh plugin --profile desktop add dsh-mobile-harness`）。
 
 ## 1.0.0 — 2026-10-31
 

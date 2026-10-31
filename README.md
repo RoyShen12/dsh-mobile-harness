@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-1.0.0-4c8dff" />
+  <a href="https://www.npmjs.com/package/dsh-mobile-harness"><img alt="npm" src="https://img.shields.io/npm/v/dsh-mobile-harness?color=4c8dff" /></a>
   <img alt="license" src="https://img.shields.io/badge/license-MIT-3ddc84" />
   <img alt="platform" src="https://img.shields.io/badge/platform-Android%20%7C%20Web-3ddc84" />
   <img alt="dsh" src="https://img.shields.io/badge/DeepSeek%20Harness-%E2%89%A5%200.2.1--rc.3-6b5bff" />
