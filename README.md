@@ -149,7 +149,13 @@ profile 在 `~/.dsh/profiles/<名字>`（Windows 是 `%USERPROFILE%\.dsh\profile
 插件没装好或 DSH 没重启。检查 profile 的 `package.json` 里有没有依赖和 bundle 条目，然后重启。
 
 **Cloudflare 下载失败？**
-网络问题。可以手动下载 `cloudflared-windows-amd64.exe`，改名 `cloudflared.exe` 放到 `~/.dsh/remote-access/bin/`，再点一次「连接」。
+插件会依次试 8 个地址（官方 + 7 个镜像），全都不通才会报错。三条退路，任选一条：
+
+1. **自己的镜像**：设环境变量 `DSH_CLOUDFLARED_URL` 指向你能连的地址，下次点下载会先试它。
+2. **手动放置**：下载 [cloudflared-windows-amd64.exe](https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe)，改名 `cloudflared.exe`，放到 `~/.dsh/remote-access/bin/`（Windows 是 `C:\Users\<你>\.dsh\remote-access\bin\`），面板会显示「程序已就绪」。
+3. **本来就有**：只要 `PATH` 里能找到 `cloudflared`，插件直接用它，不再下载。
+
+下载卡住时面板上有「停止下载」；下坏了（文件损坏、下到一半）用「删除」（点两次确认），删掉重下即可。
 
 **电脑重启后手机连不上了？**
 Cloudflare 快速隧道每次重启都会换地址，重新扫码即可；外部隧道和 Tailscale 的地址是稳定的。

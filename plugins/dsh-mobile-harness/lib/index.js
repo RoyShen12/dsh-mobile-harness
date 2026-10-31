@@ -174,6 +174,8 @@ export function apply(ctx) {
           }
           try {
             if (body?.action === 'install') return json(await service.installCloudflared())
+            if (body?.action === 'cancel') return json(await service.cancelCloudflared())
+            if (body?.action === 'delete') return json(await service.removeCloudflared())
             if (body?.action === 'restart') return json(await service.restartCloudflared())
             return json({ error: '未知操作' }, 400)
           } catch (error) {

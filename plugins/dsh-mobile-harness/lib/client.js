@@ -487,6 +487,9 @@ globalThis.__ModuleLoader__.load({
       const [busy, setBusy] = useState(false)
       const [externalDraft, setExternalDraft] = useState(null)
       const [maxOnlineDraft, setMaxOnlineDraft] = useState(null)
+      // Two-step delete for the downloaded cloudflared: the button is small and a stray click
+      // would cost another 50 MB download, so it asks once.
+      const [cfConfirmDelete, setCfConfirmDelete] = useState(false)
       const [confirmingRequest, setConfirmingRequest] = useState(null)
       const [switchNote, setSwitchNote] = useState(null)
 
@@ -766,7 +769,7 @@ globalThis.__ModuleLoader__.load({
       const entryTip = status?.tunnel === 'external'
         ? '填好下面的外网地址，面板的网址和二维码都会用它。'
         : status?.tunnel === 'quick'
-          ? '免账号：插件自己下载 cloudflared 建隧道，地址每次重启都会变。'
+          ? '免账号：插件自己下载 cloudflared 建隧道，地址每次重启都会变。下不动就点「停止下载」再重试，或把 cloudflared.exe 放到 ~/.dsh/remote-access/bin/。'
           : status?.tunnel === 'none'
             ? '不起隧道，只监听本机端口；手机连不上，适合在本机调试。'
             : '需要本机已登录 Tailscale，并已把这个网关端口 serve 出去。不推荐：走 DERP 中继时延迟高，能用外部隧道或 Cloudflare 就别用它。'
@@ -972,23 +975,50 @@ globalThis.__ModuleLoader__.load({
                   ),
                   downloadBar,
                   downloadNote,
-                  cloudflare?.binary === 'missing' || cfDown
+                  // A download in flight only has one useful action: stop it. Every mirror can hang,
+                  // and waiting 30 s per address for eight addresses is a bad way to spend an evening.
+                  cfDown
+                    ? h(
+                        'button',
+                        { type: 'button', className: CLS.button, disabled: busy, onClick: () => cloudflareAction('cancel') },
+                        '停止下载'
+                      )
+                    : cloudflare?.binary === 'missing'
+                      ? h(
+                          'button',
+                          { type: 'button', className: CLS.button, disabled: busy || phaseBusy, onClick: () => cloudflareAction('install') },
+                          cloudflare?.downloadError ? '重新下载（约 50 MB）' : '下载 cloudflared（约 50 MB）'
+                        )
+                      : h(
+                          'button',
+                          { type: 'button', className: CLS.button, disabled: busy || phaseBusy, onClick: () => cloudflareAction('restart') },
+                          '重新连接'
+                        ),
+                  // Deleting is the way out of a corrupt / half-written binary; the copy on PATH is
+                  // not ours to delete, so the button only appears for the plugin's own file.
+                  !cfDown && cloudflare?.binary === 'ready' && cloudflare?.binarySource === 'plugin'
                     ? h(
                         'button',
                         {
                           type: 'button',
                           className: CLS.button,
-                          disabled: cfDown,
-                          onClick: () => cloudflareAction('install')
+                          disabled: busy || phaseBusy,
+                          onClick: () => {
+                            if (!cfConfirmDelete) {
+                              setCfConfirmDelete(true)
+                              return
+                            }
+                            setCfConfirmDelete(false)
+                            cloudflareAction('delete')
+                          }
                         },
-                        cfDown ? '下载中' : cloudflare?.downloadError ? '重试下载（约 50 MB）' : '下载 cloudflared（约 50 MB）'
+                        cfConfirmDelete ? '确认删除本地程序' : '删除'
                       )
-                    : h(
-                        'button',
-                        { type: 'button', className: CLS.button, disabled: busy || phaseBusy, onClick: () => cloudflareAction('restart') },
-                        '重新连接'
-                      ),
+                    : null,
                   h(CopyButton, { text: cloudflare?.url || '' }),
+                  cloudflare?.binarySource === 'system'
+                    ? h('p', { className: CLS.barNote }, '用的是系统 PATH 里的 cloudflared，不用再下载。')
+                    : null,
                   // The tile says why a download failed (mirror 404, timeout) without a hidden console.
                   cloudflare?.downloadError && !cfDown ? h('p', { className: CLS.fieldTip }, '上次下载失败：' + cloudflare.downloadError) : null,
                   !cloudflare?.downloadError && cloudflare?.lastError ? h('p', { className: CLS.fieldTip }, cloudflare.lastError) : null,

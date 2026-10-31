@@ -31,6 +31,9 @@ tools/remote-config.json
 *.log
 build-log.txt
 
+# a copy of cloudflared.exe kept next to the APK for offline sharing (52 MB)
+app/dist/*.exe
+
 # keep only the released APK in the repo; older builds live in GitHub Releases
 app/dist/*.apk
 !app/dist/dsh-mobile-harness-1.0.0.apk

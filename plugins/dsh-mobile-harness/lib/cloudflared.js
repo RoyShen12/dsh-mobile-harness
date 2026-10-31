@@ -17,11 +17,39 @@ import { join } from 'node:path'
 import { get as httpGet } from 'node:http'
 import { get as httpsGet } from 'node:https'
 
-/** Official release first, then a mirror that is reachable from mainland China. */
-export const QUICK_TUNNEL_DOWNLOAD_URLS = [
-  'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe',
-  'https://ghfast.top/https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe'
+/** The one official release asset; every mirror below serves a copy of it. */
+const OFFICIAL_DOWNLOAD_URL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe'
+
+/** GitHub proxies, in rough order of how often they answer from mainland China. A proxy is only a
+ * prefix: https://<proxy>/<the full github url>. None of them is guaranteed, which is why this is a
+ * list and why the panel can stop the download and retry. */
+const MIRROR_PROXIES = [
+  'https://ghfast.top/',
+  'https://gh-proxy.com/',
+  'https://ghproxy.net/',
+  'https://hk.gh-proxy.com/',
+  'https://github.moeyy.xyz/',
+  'https://gh.llkk.cc/'
 ]
+
+/** Hosts that mirror github.com itself: same path, different domain. */
+const MIRROR_HOSTS = [
+  'https://kkgithub.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe'
+]
+
+export const QUICK_TUNNEL_DOWNLOAD_URLS = [
+  OFFICIAL_DOWNLOAD_URL,
+  ...MIRROR_PROXIES.map((proxy) => proxy + OFFICIAL_DOWNLOAD_URL),
+  ...MIRROR_HOSTS
+]
+
+/** Download order for one run: an explicit DSH_CLOUDFLARED_URL wins (for a LAN mirror or an
+ * accelerator the user already trusts), then the built-in list. */
+export function downloadUrls(env = process.env) {
+  const custom = String(env.DSH_CLOUDFLARED_URL || '').trim()
+  const urls = custom ? [custom, ...QUICK_TUNNEL_DOWNLOAD_URLS] : QUICK_TUNNEL_DOWNLOAD_URLS.slice()
+  return [...new Set(urls)]
+}
 
 const QUICK_HOST_PATTERN = /https:\/\/[a-z0-9][a-z0-9-]*\.trycloudflare\.com/
 const MIN_BINARY_BYTES = 8 * 1024 * 1024
@@ -47,9 +75,27 @@ export function parseQuickUrl(text) {
 
 /** Stream one URL to a file, following redirects; resolves with the byte count.
  * Exported for the progress-bar test (and so the panel can be checked without real downloads). */
-export function downloadToFile(url, target, onProgress) {
+export function downloadToFile(url, target, onProgress, options = {}) {
+  // options.signal lets the panel stop a download that is going nowhere (every mirror can hang).
+  const signal = options.signal || null
   return new Promise((resolve, reject) => {
+    let settled = false
+    const fail = (error) => {
+      if (settled) return
+      settled = true
+      reject(error)
+    }
+    const done = (bytes) => {
+      if (settled) return
+      settled = true
+      resolve(bytes)
+    }
     const attempt = (current, hops) => {
+      if (settled) return
+      if (signal && signal.aborted) {
+        fail(new Error('下载已取消'))
+        return
+      }
       // http is only used by the tests' local stand-in server; production URLs are https.
       const fetchUrl = current.startsWith('http://') ? httpGet : httpsGet
       const request = fetchUrl(current, { headers: { 'user-agent': 'dsh-mobile-harness' } }, (response) => {
@@ -62,13 +108,34 @@ export function downloadToFile(url, target, onProgress) {
         }
         if (status !== 200) {
           response.resume()
-          reject(new Error('HTTP ' + status + ' 下载失败'))
+          fail(new Error('HTTP ' + status + ' 下载失败'))
           return
         }
         const total = Number(response.headers['content-length'] || 0)
         let seen = 0
         let lastEmit = 0
         const sink = createWriteStream(target)
+        const onAbort = () => {
+          try { response.destroy() } catch { /* already gone */ }
+          // Wait for the write stream to close before failing: on Windows an unlink of a file
+          // that is still open just fails, and install() would leave a .part behind.
+          try {
+            if (!sink.closed && !sink.destroyed) {
+              sink.once('close', () => fail(new Error('下载已取消')))
+              sink.destroy()
+              return
+            }
+          } catch { /* fall through */ }
+          fail(new Error('下载已取消'))
+        }
+        if (signal) {
+          if (signal.aborted) {
+            onAbort()
+            return
+          }
+          signal.addEventListener('abort', onAbort, { once: true })
+          sink.on('close', () => signal.removeEventListener('abort', onAbort))
+        }
         response.on('data', (chunk) => {
           seen += chunk.length
           const now = Date.now()
@@ -79,13 +146,14 @@ export function downloadToFile(url, target, onProgress) {
           }
         })
         response.pipe(sink)
-        sink.on('error', reject)
+        sink.on('error', fail)
         sink.on('finish', () => {
+          if (signal) signal.removeEventListener('abort', onAbort)
           if (typeof onProgress === 'function') onProgress({ received: seen, total })
-          resolve(seen)
+          done(seen)
         })
       })
-      request.on('error', reject)
+      request.on('error', (error) => fail(error))
       request.setTimeout(30000, () => request.destroy(new Error('下载超时')))
     }
     attempt(url, 0)
@@ -118,19 +186,61 @@ export class CloudflaredTunnel {
     this.downloadStartedAt = null
     this.downloadBytes = 0
     this.restartTimer = null
+    /** Set by cancelDownload(); install() returns quietly instead of reporting a failure. */
+    this.cancelled = false
+    this.abortDownload = null
+    /** Host names tried during the current/last download, most recent last (panel shows them). */
+    this.downloadTried = []
+    /** Cached PATH lookup result; undefined means "not looked yet", null means "not there". */
+    this.systemBinary = undefined
   }
 
   binaryPath() {
     return join(this.stateDir, 'bin', process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared')
   }
 
-  hasBinary() {
-    try {
-      const info = statSync(this.binaryPath())
-      return info.size >= MIN_BINARY_BYTES
-    } catch {
-      return false
+  /** A cloudflared already installed on the machine (PATH) is used as-is: no 50 MB download for
+   * people who have it, and a way out when every mirror is blocked. */
+  findOnPath() {
+    if (this.systemBinary !== undefined) return this.systemBinary
+    this.systemBinary = null
+    const env = process.env
+    const dirs = String(env.PATH || env.Path || '').split(process.platform === 'win32' ? ';' : ':')
+    const names = process.platform === 'win32' ? ['cloudflared.exe'] : ['cloudflared']
+    for (const raw of dirs) {
+      const dir = raw.replace(/^"|"$/g, '').trim()
+      if (!dir) continue
+      for (const name of names) {
+        const candidate = join(dir, name)
+        try {
+          const info = statSync(candidate)
+          if (info.isFile() && info.size >= MIN_BINARY_BYTES) {
+            this.systemBinary = candidate
+            return candidate
+          }
+        } catch {
+          /* keep looking */
+        }
+      }
     }
+    return null
+  }
+
+  /** Which binary a tunnel would use: the plugin's copy first, then one on PATH. */
+  resolveBinary() {
+    const own = this.binaryPath()
+    try {
+      if (statSync(own).size >= MIN_BINARY_BYTES) return { exe: own, source: 'plugin' }
+    } catch {
+      /* not downloaded yet */
+    }
+    const system = this.findOnPath()
+    if (system) return { exe: system, source: 'system' }
+    return { exe: own, source: null }
+  }
+
+  hasBinary() {
+    return this.resolveBinary().source !== null
   }
 
   /** Public status for the panel snapshot; never contains a token (quick tunnels have none). */
@@ -140,6 +250,12 @@ export class CloudflaredTunnel {
       state: this.state,
       url: this.url,
       binary: this.hasBinary() ? 'ready' : downloading ? 'downloading' : 'missing',
+      /** 'plugin' (our own copy), 'system' (found on PATH) or null. */
+      binarySource: this.resolveBinary().source,
+      /** True while a download can still be stopped from the panel. */
+      canCancel: downloading,
+      /** Host names this run tried, so a failed download names them instead of saying "failed". */
+      downloadTried: downloading ? this.downloadTried.slice() : [],
       downloading,
       downloadPercent: downloading ? this.downloadPercent : this.downloadBytes ? 100 : null,
       downloadReceived: downloading ? this.downloadReceived : null,
@@ -154,10 +270,20 @@ export class CloudflaredTunnel {
     }
   }
 
-  /** Download the binary into <stateDir>/bin (official URL, then a mirror). */
+  /** Close out a download run. A plain "return this.snapshot()" inside try{} snapshots before
+   * finally{} clears the flag, so the panel would keep showing a progress bar forever. */
+  finishDownload() {
+    this.downloading = false
+    this.abortDownload = null
+    return this.snapshot()
+  }
+
+  /** Download the binary into <stateDir>/bin, trying every mirror until one answers. */
   async install() {
-    if (this.downloading) return this.snapshot()
+    if (this.downloading) return this.finishDownload()
     this.downloading = true
+    this.cancelled = false
+    this.abortDownload = new AbortController()
     this.downloadPercent = 0
     this.downloadReceived = 0
     this.downloadTotal = 0
@@ -165,6 +291,7 @@ export class CloudflaredTunnel {
     this.downloadSource = null
     this.downloadError = null
     this.downloadStartedAt = Date.now()
+    this.downloadTried = []
     this.lastError = null
     const target = this.binaryPath()
     const temp = target + '.part'
@@ -177,37 +304,109 @@ export class CloudflaredTunnel {
         ? Math.min(99, Math.round((received / this.downloadTotal) * 100))
         : null
     }
+    const dropTemp = () => {
+      try { if (existsSync(temp)) unlinkSync(temp) } catch { /* ignore */ }
+    }
     try {
       mkdirSync(join(this.stateDir, 'bin'), { recursive: true })
-      let lastError = null
-      for (const url of QUICK_TUNNEL_DOWNLOAD_URLS) {
+      const urls = downloadUrls()
+      const failures = []
+      for (const url of urls) {
+        // The panel's "停止" button sets this between attempts as well as during one.
+        if (this.cancelled) return this.finishDownload()
+        const host = hostOfUrl(url)
         try {
-          try { if (existsSync(temp)) unlinkSync(temp) } catch { /* ignore */ }
-          this.downloadSource = hostOfUrl(url)
+          dropTemp()
+          this.downloadSource = host
+          this.downloadTried.push(host)
           this.downloadStartedAt = Date.now()
           markProgress(0, 0)
-          const bytes = await downloadToFile(url, temp, ({ received, total }) => markProgress(received, total))
+          const bytes = await downloadToFile(url, temp, ({ received, total }) => markProgress(received, total), {
+            signal: this.abortDownload ? this.abortDownload.signal : null
+          })
           if (bytes < MIN_BINARY_BYTES) throw new Error('文件太小（' + bytes + ' 字节），镜像可能返回了错误页')
+          if (this.cancelled) {
+            dropTemp()
+            return this.finishDownload()
+          }
           try { if (existsSync(target)) unlinkSync(target) } catch { /* ignore */ }
           renameSync(temp, target)
           this.downloadPercent = 100
           this.downloadBytes = bytes
           this.downloadBps = 0
-          this.log('cloudflared downloaded (' + Math.round(bytes / 1048576) + ' MB)')
-          return this.snapshot()
+          this.log('cloudflared downloaded from ' + host + ' (' + Math.round(bytes / 1048576) + ' MB)')
+          return this.finishDownload()
         } catch (error) {
-          lastError = error
-          this.downloadError = error instanceof Error ? error.message : String(error)
+          const message = error instanceof Error ? error.message : String(error)
+          if (this.cancelled) {
+            dropTemp()
+            return this.finishDownload()
+          }
+          failures.push((host || '地址') + '：' + message)
+          this.downloadError = '已试 ' + failures.length + ' 个地址都不行：' + failures.slice(-1)[0]
           this.downloadBps = 0
-          try { if (existsSync(temp)) unlinkSync(temp) } catch { /* ignore */ }
-          this.warn('cloudflared download failed from ' + url + ': ' + (error instanceof Error ? error.message : String(error)))
+          dropTemp()
+          this.warn('cloudflared download failed from ' + url + ': ' + message)
         }
       }
-      this.lastError = lastError instanceof Error ? lastError.message : '下载 cloudflared 失败'
+      this.downloadSource = null
+      this.downloadError = '这 ' + failures.length + ' 个地址都失败了。可以把 cloudflared.exe 手动放到 ' + target + '，或者设置 DSH_CLOUDFLARED_URL 指向你自己能连的镜像。'
+      this.lastError = '下载 cloudflared 失败：' + failures.slice(0, 3).join('；')
       throw new Error(this.lastError)
     } finally {
       this.downloading = false
+      this.abortDownload = null
     }
+  }
+
+  /** Stop an in-flight download (the panel's 停止 button); partial bytes are removed. */
+  cancelDownload() {
+    if (!this.downloading) return this.snapshot()
+    this.cancelled = true
+    if (this.abortDownload) {
+      try { this.abortDownload.abort() } catch { /* ignore */ }
+    }
+    this.downloadBps = 0
+    this.downloadPercent = null
+    this.downloadError = null
+    this.warn('cloudflared download cancelled from the panel')
+    return this.snapshot()
+  }
+
+  /**
+   * Delete the downloaded binary (panel 删除 button). This is the way out of a corrupt or
+   * half-written file: remove it, then download again. A cloudflared found on PATH is not
+   * touched — removing that is the user's own file manager's job.
+   */
+  async removeBinary() {
+    if (this.downloading) this.cancelDownload()
+    try {
+      await this.stop()
+    } catch (error) {
+      this.warn('cloudflared stop before delete failed: ' + (error instanceof Error ? error.message : String(error)))
+    }
+    const target = this.binaryPath()
+    for (const file of [target, target + '.part']) {
+      try {
+        if (existsSync(file)) unlinkSync(file)
+      } catch (error) {
+        this.lastError = '删除失败：' + (error instanceof Error ? error.message : String(error))
+        this.warn('cloudflared delete failed for ' + file + ': ' + this.lastError)
+      }
+    }
+    this.systemBinary = undefined
+    this.downloadBytes = 0
+    this.downloadPercent = null
+    this.downloadReceived = 0
+    this.downloadTotal = 0
+    this.downloadBps = 0
+    this.downloadSource = null
+    this.downloadError = null
+    this.downloadTried = []
+    this.state = 'idle'
+    this.url = null
+    if (!this.lastError) this.log('cloudflared binary deleted')
+    return this.snapshot()
   }
 
   /** Start a quick tunnel to the local gateway port; resolves once the public URL is known. */
@@ -215,7 +414,7 @@ export class CloudflaredTunnel {
     if (!this.hasBinary()) {
       this.state = 'error'
       this.lastError = '未安装 cloudflared'
-      throw new Error('未安装 cloudflared：请先在面板点「下载 cloudflared」（约 50 MB）')
+      throw new Error('未安装 cloudflared：在面板点「下载 cloudflared」（约 50 MB），或把 cloudflared.exe 放到 PATH / ' + this.binaryPath())
     }
     await this.stop()
     this.port = port
@@ -226,7 +425,7 @@ export class CloudflaredTunnel {
 
   spawnOnce() {
     return new Promise((resolve, reject) => {
-      const exe = this.binaryPath()
+      const exe = this.resolveBinary().exe
       const args = ['tunnel', '--url', 'http://127.0.0.1:' + this.port, '--no-autoupdate']
       this.state = 'starting'
       this.url = null

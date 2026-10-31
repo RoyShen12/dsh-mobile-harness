@@ -1,5 +1,12 @@
 # 更新记录
 
+## 1.0.2 — 2026-10-31
+- cloudflared 下载从 2 个地址扩到 8 个（官方 + ghfast.top / gh-proxy.com / ghproxy.net / hk.gh-proxy.com / github.moeyy.xyz / gh.llkk.cc / kkgithub），逐个试；支持环境变量 `DSH_CLOUDFLARED_URL` 指定自己的镜像（优先生效）。
+- 下载中面板多一个「停止下载」按钮：不用再等 8 个地址各自超时。
+- 程序就绪后多一个「删除」（点两次确认）：binary 损坏或下到一半时，删掉重下即可，不用去翻目录。
+- 机器上已装 cloudflared（PATH 里能找到）就直接用，不再下载；面板会写明「用的是系统 PATH 里的 cloudflared」。
+- 下载全部失败时，提示里直接给出目标路径与 `DSH_CLOUDFLARED_URL` 用法。
+
 ## 1.0.1 — 2026-10-31
 - 面板「网络入口」把 Tailscale 排到最后，并直接标注「不推荐：走 DERP 中继时延迟高」；外部隧道与 Cloudflare 排前两位。
 - 发布到 npm：`npm i dsh-mobile-harness`（或 `dsh plugin --profile desktop add dsh-mobile-harness`）。

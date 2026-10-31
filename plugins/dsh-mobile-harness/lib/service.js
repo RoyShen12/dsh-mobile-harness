@@ -704,6 +704,25 @@ export class RemoteService {
     return this.snapshot()
   }
 
+  /** Stop an in-flight cloudflared download (panel 停止下载). Partial bytes are dropped. */
+  cancelCloudflared() {
+    this.cloudflared.cancelDownload()
+    return this.snapshot()
+  }
+
+  /**
+   * Delete the downloaded binary (panel 删除). The escape hatch for a corrupt or half-written
+   * file: remove it, then download again. Refused while a tunnel is actually running, because
+   * deleting the exe under a live process leaves the panel showing an address that is gone.
+   */
+  async removeCloudflared() {
+    const live = this.cloudflared.state === 'running' || this.cloudflared.state === 'starting'
+    if (live) throw new Error('Cloudflare 隧道正在运行：先关掉上面的开关，再删除')
+    const next = await this.cloudflared.removeBinary()
+    if (this.state.tunnel === 'quick') this.publicUrl = null
+    return this.snapshot()
+  }
+
   /** Manual reconnect for a stuck quick tunnel: keeps the mode, gets a fresh public URL. */
   async restartCloudflared() {
     if (this.state.tunnel !== 'quick' || this.phase !== 'enabled') {
