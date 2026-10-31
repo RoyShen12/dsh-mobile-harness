@@ -1,5 +1,9 @@
 # 更新记录
 
+## 1.0.3 — 2026-10-31
+- 补上 npm 元数据：`repository`（指向本仓库的 `plugins/dsh-mobile-harness` 子目录）、`homepage`、`bugs`、`author`。npm 页面从此能看到源码链接，插件市场收录时也能把仓库与包关联起来算下载量。
+- 功能零改动，代码与 1.0.2 完全一致。
+
 ## 1.0.2 — 2026-10-31
 - cloudflared 下载从 2 个地址扩到 8 个（官方 + ghfast.top / gh-proxy.com / ghproxy.net / hk.gh-proxy.com / github.moeyy.xyz / gh.llkk.cc / kkgithub），逐个试；支持环境变量 `DSH_CLOUDFLARED_URL` 指定自己的镜像（优先生效）。
 - 下载中面板多一个「停止下载」按钮：不用再等 8 个地址各自超时。

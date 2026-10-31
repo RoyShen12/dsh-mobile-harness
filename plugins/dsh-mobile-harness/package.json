@@ -1,9 +1,19 @@
 {
   "name": "dsh-mobile-harness",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "type": "module",
   "description": "DSH Mobile Harness — bring your desktop DeepSeek Harness session to your phone: native Android app, QR pairing, four network entries, device admission control.",
   "license": "MIT",
+  "author": "afeack (https://github.com/afeack)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/afeack/dsh-mobile-harness.git",
+    "directory": "plugins/dsh-mobile-harness"
+  },
+  "homepage": "https://github.com/afeack/dsh-mobile-harness#readme",
+  "bugs": {
+    "url": "https://github.com/afeack/dsh-mobile-harness/issues"
+  },
   "keywords": [
     "deepseek-harness",
     "dsh",
