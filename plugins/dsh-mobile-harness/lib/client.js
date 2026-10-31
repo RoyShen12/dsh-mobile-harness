@@ -762,14 +762,14 @@ globalThis.__ModuleLoader__.load({
           )
         : null
       const downloadNote = cfDown ? h('p', { className: CLS.barNote }, cfBarText) : null
-            const entryOptions = [['tailscale', 'Tailscale'], ['external', 'SakuraFrp / 外部'], ['quick', 'Cloudflare'], ['none', '仅本机']]
+            const entryOptions = [['external', 'SakuraFrp / 外部'], ['quick', 'Cloudflare'], ['none', '仅本机'], ['tailscale', 'Tailscale']]
       const entryTip = status?.tunnel === 'external'
         ? '填好下面的外网地址，面板的网址和二维码都会用它。'
         : status?.tunnel === 'quick'
           ? '免账号：插件自己下载 cloudflared 建隧道，地址每次重启都会变。'
           : status?.tunnel === 'none'
             ? '不起隧道，只监听本机端口；手机连不上，适合在本机调试。'
-            : '需要本机已登录 Tailscale，并已把这个网关端口 serve 出去。'
+            : '需要本机已登录 Tailscale，并已把这个网关端口 serve 出去。不推荐：走 DERP 中继时延迟高，能用外部隧道或 Cloudflare 就别用它。'
       const connectTip = enabled
         ? (status?.tunnel === 'external'
             ? '首次访问会提示证书不受信任：点「高级 → 继续前往」。'
@@ -777,7 +777,7 @@ globalThis.__ModuleLoader__.load({
               ? 'Cloudflare 免费隧道的地址每次重启都会变，换了地址要重新扫码。'
               : status?.tunnel === 'none'
                 ? '当前只有本机能访问，手机连不上。'
-                : '手机需安装 Tailscale 并登录同一账号。')
+                : '手机需安装 Tailscale 并登录同一账号；走中继时延迟会明显偏高。')
         : '打开开关后生成二维码：一次性登录链接（10 分钟），扫一次就失效，截图外发也进不来。'
 
       return h(

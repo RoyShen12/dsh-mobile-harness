@@ -1,5 +1,8 @@
 # 更新记录
 
+## 1.0.1 — 2026-10-31
+- 面板「网络入口」把 Tailscale 排到最后，并直接标注「不推荐：走 DERP 中继时延迟高」；外部隧道与 Cloudflare 排前两位。
+
 ## 1.0.0 — 2026-10-31
 
 第一个公开发布：插件 `dsh-mobile-harness@1.0.0` + 可选的 Android App 1.0.0（versionCode 31，约 4 MB）。
