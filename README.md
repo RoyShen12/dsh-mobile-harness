@@ -25,9 +25,11 @@ DSH Mobile Harness 给 DSH 加一页「远程访问」：一个网关、一个�
 | 部分 | 是什么 | 必需吗 |
 | --- | --- | --- |
 | **插件** | 在 DSH 里加一页「远程访问」：网关、密码、二维码、隧道、设备准入 | 必需 |
-| **App** | 4 MB 的 Android 壳：相机扫码、记住密码、下载落盘 | 可选 |
+| **App** | 4 MB 的 Android 壳：相机扫码、记住密码、下载落盘 | 可选（**只有 Android**） |
 
 **手机不一定需要 App。** 任何浏览器（Safari / Chrome / 微信内置也行）扫一下面板上的二维码、输一次密码，就能接着用电脑上的同一个会话；App 只是把这段流程做得更顺。两条路走的是同一个网关、同一套准入，扫码一样要核对 6 位配对码。
+
+**原生 App 目前只支持 Android。** iPhone / iPad、鸿蒙手机不用装任何东西：用系统自带浏览器（Safari / 鸿蒙浏览器 / Chrome）打开同一个网址就行，功能完全一致，还能「添加到主屏幕」当 PWA 用。桌面浏览器同理。
 
 不是另开一个账号，是**同一台电脑、同一个会话**：上下文、工具、文件都还是电脑上那份。
 
@@ -42,8 +44,8 @@ DSH Mobile Harness 给 DSH 加一页「远程访问」：一个网关、一个�
 
 ### 手机端
 
-- **浏览器（不用装东西）**：扫码或手输地址 + 密码即可进入，窄屏皮肤自动生效。
-- **App（可选）**：相机扫码取景框自动识别（也可从相册选图）、四个入口 chip、密码按地址记住、密码错了自动清掉并提示重填、下载钩子（电脑上点「下载」直接落到手机）。
+- **浏览器（不用装东西，iOS / 鸿蒙 / Android / 桌面都行）**：扫码或手输地址 + 密码即可进入，窄屏皮肤自动生效。
+- **App（可选，只有 Android）**：相机扫码取景框自动识别（也可从相册选图）、四个入口 chip、密码按地址记住、密码错了自动清掉并提示重填、下载钩子（电脑上点「下载」直接落到手机）。
 
 ### 安全
 
@@ -87,13 +89,17 @@ profile 在 `~/.dsh/profiles/<名字>`（Windows 是 `%USERPROFILE%\.dsh\profile
 ```json
 {
   "dependencies": {
-    "dsh-mobile-harness": "1.0.0"
+    "dsh-mobile-harness": "^1.0.2"
   },
   "dsh": { "profile": { "bundles": ["...", "dsh-mobile-harness"] } }
 }
 ```
 
 `dsh.profile.bundles` 里必须有包名，否则 DSH 不会去加载它。改完在 profile 目录里 `pnpm install`。
+
+**方式 D：离线 tgz**
+
+从 [插件 1.0.2 release](https://github.com/afeack/dsh-mobile-harness/releases/tag/plugin-v1.0.2) 下 `dsh-mobile-harness-1.0.2.tgz`（内容和 npm 包一致），解开到 `<profile>/node_modules/dsh-mobile-harness/`，再把 `dsh-mobile-harness` 写进 `dsh.profile.bundles`；或者 `pnpm add file:./dsh-mobile-harness-1.0.2.tgz`。内网 / 连不上 npm 时用这条。
 
 ### 2. 重启 DSH
 
@@ -114,7 +120,7 @@ profile 在 `~/.dsh/profiles/<名字>`（Windows 是 `%USERPROFILE%\.dsh\profile
 
 **B. 装 App（可选）**
 
-1. 装 [Releases](https://github.com/afeack/dsh-mobile-harness/releases) 里的 `dsh-mobile-harness-1.0.0.apk`（或仓库里的 `app/dist/dsh-mobile-harness-1.0.0.apk`）。
+1. 装 [App 1.0.0 release](https://github.com/afeack/dsh-mobile-harness/releases/tag/v1.0.0) 里的 `dsh-mobile-harness-1.0.0.apk`（或仓库里的 `app/dist/dsh-mobile-harness-1.0.0.apk`）。iOS / 鸿蒙没有 App，用浏览器即可。
 2. 打开 App → 相机扫码（或从相册选图）→ 同样核对 6 位配对码。
 3. 勾「记住地址和密码」，以后换地址也能自动填。
 
@@ -228,7 +234,7 @@ ANDROID_HOME=<你的 SDK> JAVA_HOME=<你的 JDK17> ./gradlew assembleDebug
 
 **DSH Mobile Harness** brings your desktop [DeepSeek Harness](https://github.com/deepseek-ai) session to your phone. A DSH plugin adds a gateway with a password, a one-time QR ticket, four network entries and per-device admission control.
 
-**No app required.** Any browser can scan the QR code, type the password, and continue the same desktop session. The 4 MB Android app is optional: camera scanning, remembered passwords, download-to-phone.
+**No app required.** Any browser can scan the QR code, type the password, and continue the same desktop session. The 4 MB Android app is optional: camera scanning, remembered passwords, download-to-phone. **The native app is Android-only for now** — on iOS / iPadOS and HarmonyOS, just use the built-in browser (same gateway, same admission control, add to home screen as a PWA).
 
 - Four network entries: external tunnel (SakuraFrp) and Cloudflare quick tunnel are recommended; LAN-only for local use; Tailscale works but usually relays traffic and adds latency.
 - Pairing: password → 6-digit code shown on both ends → device allow-list. Scanning a QR never grants access by itself.
@@ -245,4 +251,4 @@ node scripts/install-plugin.mjs --profile desktop
 cd ~/.dsh/profiles/desktop && pnpm install
 ```
 
-APK: the [Releases](https://github.com/afeack/dsh-mobile-harness/releases) page. License: MIT. See [SECURITY.md](SECURITY.md) before exposing the gateway to the public internet.
+Downloads are split by component: plugin tarball in [plugin-v1.0.2](https://github.com/afeack/dsh-mobile-harness/releases/tag/plugin-v1.0.2), APK in [v1.0.0](https://github.com/afeack/dsh-mobile-harness/releases/tag/v1.0.0). License: MIT. See [SECURITY.md](SECURITY.md) before exposing the gateway to the public internet.
