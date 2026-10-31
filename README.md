@@ -80,7 +80,7 @@ DSH Mobile Harness 由两部分组成：
 ### 1. 装插件
 
 ```bash
-git clone https://github.com/<你的账号>/dsh-mobile-harness.git
+git clone https://github.com/afeack/dsh-mobile-harness.git
 cd dsh-mobile-harness
 node scripts/install-plugin.mjs --profile desktop   # 换成你的 profile 名字
 ```
@@ -227,7 +227,7 @@ ANDROID_HOME=<你的 SDK> JAVA_HOME=<你的 JDK17> ./gradlew assembleDebug
 Install (plugin):
 
 ```bash
-git clone https://github.com/<you>/dsh-mobile-harness.git
+git clone https://github.com/afeack/dsh-mobile-harness.git
 cd dsh-mobile-harness
 node scripts/install-plugin.mjs --profile desktop
 cd ~/.dsh/profiles/desktop && pnpm install   # then restart DSH
