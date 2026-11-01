@@ -16,15 +16,15 @@
 
 > 电脑端面板：一个总开关——连接 / 网络入口 / 设备准入。
 
-**下载**：插件（电脑端）→ [npm](https://www.npmjs.com/package/dsh-mobile-harness) 或 [plugin-v1.0.2 离线包](https://github.com/afeack/dsh-mobile-harness/releases/tag/plugin-v1.0.2)；手机 App（Android，可选）→ [v1.0.0 APK](https://github.com/afeack/dsh-mobile-harness/releases/tag/v1.0.0)。两者分开发布，版本各自独立。
+**下载**：插件（电脑端）→ [npm](https://www.npmjs.com/package/dsh-mobile-harness) 或 [离线包 1.0.2](https://github.com/afeack/dsh-mobile-harness/releases/tag/plugin-v1.0.2)；手机 App（Android，可选）→ [v1.0.0 APK](https://github.com/afeack/dsh-mobile-harness/releases/tag/v1.0.0)。两者分开发布，版本各自独立。
 
 ---
 
 ## 功能
 
-为DSH添加了远程控制功能，仅需使用浏览器，扫码!即可体验随走随身的DSH!
+为DSH添加了远程控制功能，仅需使用浏览器，扫码即可体验随走随身的DSH。
 在您不满足于网页版的体验时，可以选择下载我们的APK我们会不断更新我们的安卓客户端。
-担心被别人链接电脑?不用担心，首次授权确认+设备管理+随机密码，保护您的链接安全。
+担心被别人连接电脑？不用担心，首次授权确认+设备管理+随机密码，保护您的连接安全。
 - 我们提供四种远程方式，适用于不同人群:
 - ①cloudflare(免注册、免费、最省事、代价是每次重启DSH需要重新扫码登录)
 - ②外部隧道(内网穿透、需注册、可能付费、需实名，但好处是最稳定且重启DSH后保留原本的登录，无需再次扫码)
@@ -36,7 +36,9 @@
 | **插件** | 在 DSH 里加一页「远程访问」：网关、密码、二维码、隧道、设备准入 | 必需 |
 | **App** | 4 MB 的 Android 壳：相机扫码、记住密码、下载落盘 | 可选（**只有 Android**） |
 
-**手机不一定需要 App。** 使用浏览器(最好使用chrome)扫一下面板上的二维码、确认一次，就能接着用电脑上的同一个DSH!
+**手机不一定需要 App。** 使用浏览器(最好使用chrome)扫一下面板上的二维码、确认一次，就能接着用电脑上的同一个DSH。
+
+iPhone / iPad、鸿蒙不装 App 也行：浏览器打开同一个网址即可，还能「添加到主屏幕」当 PWA。
 
 不是另开一个账号，是**同一台电脑、同一个会话**：上下文、工具、文件都还是电脑上那份。
 
