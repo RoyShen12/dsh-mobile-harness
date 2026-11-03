@@ -1,6 +1,6 @@
 # DSH Mobile Harness
 
-> 本 Fork 的安全修复版为插件 `1.1.0` 与 Android `1.0.1` 源码。请从当前源码安装或构建；下方上游 npm、release 和仓库内历史 APK 的旧版本未包含这些修复。首次升级后应在电脑本机重置密码并重新配对。详见 [安全说明](SECURITY.md)。
+> 本 Fork 当前源码的插件版本为 `1.2.0`，继承 `1.1.0` 安全修复并加入 Mobile Web UI 2.0；Android App 源码版本为 `1.0.1`。请从当前源码安装或构建；下方上游 npm、release 和仓库内历史 APK 的旧版本未包含这些 Fork 修复。首次升级后应在电脑本机重置密码并重新配对。详见 [安全说明](SECURITY.md)。
 
 <p align="center">
   <b>把电脑上的 DeepSeek Harness，装进你的手机。</b><br/>

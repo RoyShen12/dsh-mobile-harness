@@ -212,7 +212,10 @@ function canonicalPath(pathname) {
     }
     segments.push(segment)
   }
-  return '/' + segments.join('/')
+  const canonical = '/' + segments.join('/')
+  // A trailing slash is part of the route: DSH serves the client-module combo
+  // scripts at `/plugins/??<ids>&rev=…`, and `/plugins??…` is a 404.
+  return decoded.length > 1 && /[\\/]$/.test(decoded) && canonical !== '/' ? canonical + '/' : canonical
 }
 
 function isPluginManagementPath(pathname) {

@@ -4,6 +4,12 @@ DeepSeek Harness 插件：把「远程访问」做成 DSH 里的一个开关。�
 
 **手机端不需要装 App。** 任何浏览器扫一下面板上的二维码、输一次密码，就能接着用电脑上的同一个会话；配套的 Android App（`app/`）是可选的，只多出相机扫码、密码记忆、下载落盘。
 
+## Mobile Web UI
+
+插件 `1.2.0` 将 Mobile Web UI 拆为宿主按需加载的 skin 与 CSS chunks。窄屏手机使用紧凑单栏；宽度不超过 `1366px` 的触控设备（含折叠屏展开态）保留 DSH 原生 `64px` 导航 rail，让聊天区利用展开宽度。侧栏在可用宽度达到 `1040px` 时停靠显示，空间较小时使用浮层；右侧工具栏会按手机或展开态宽度调整。
+
+OPPO Find N5 展开态是手工检查目标，尚无本机实测结论。键盘、安全区、横屏、抽屉与右栏的行为及检查步骤见 [MOBILE-UI.md](MOBILE-UI.md)。
+
 ## 安装
 
 ```bash
@@ -82,12 +88,15 @@ node tools/diagnose.mjs --json   # 机器可读
 | `lib/tailscale.js` | `tailscale status` / `serve` 封装 |
 | `lib/state.js` | `~/.dsh/remote-access/plugin-state.json`（开关、密码、会话密钥、端口） |
 | `lib/qr.js` + `lib/qr-encoder.cjs` | 内置 QR 编码器，宿主输出矩阵、客户端画 SVG |
-| `lib/client.js` | 浏览器半边：侧栏图标 + 面板 UI + 配对弹窗 |
+| `lib/client.js` | 浏览器入口：侧栏图标、面板 UI、配对弹窗及 Mobile Web UI chunks 的按需加载 |
+| `lib/client.mobile-skin.js` | Mobile Web UI：DOM 适配、布局 / 面板 / 键盘交互和诊断状态 |
+| `lib/client.mobile-styles.js` | Mobile Web UI：响应式样式、主题 token、安全区与触控布局 |
+| `MOBILE-UI.md` | 宿主 DOM 契约、适配器维护说明与 OPPO Find N5 手工检查清单 |
 | `cordis.patch.yml` | 往 profile 插入一行宿主插件 |
 
 ## 设计约束
 
-- 浏览器半边是纯 JS（只需要 `react`/`react-dom`），不依赖构建；
+- 浏览器半边是纯 JS（只需要 `react`/`react-dom`），不依赖构建；Mobile Web UI 使用宿主支持的 `client.*.js` package-local chunks；
 - 所有宿主路由走 `ctx.connection.fetch.register`，复用 DSH 的 owner 鉴权；
 - 手机拿不到 DSH 的 owner Cookie：网关自己保管并注入；
 - 网关只监听 `127.0.0.1`，靠隧道或 frp 对外；

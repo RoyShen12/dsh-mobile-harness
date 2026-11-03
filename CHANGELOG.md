@@ -18,6 +18,13 @@
 - 顶部分栏最右侧显示插件版本；npm 上有新版时变黄色徽标，点一下复制升级命令。
 - 进行的基础的功能分类
 
+## 1.2.0（Mobile Web UI 源码，本 fork）— 2026-11-03
+- 将 mobile skin 与样式拆为宿主按需加载的 package-local chunks；旧宿主缺少 `require.async` 或关键 DOM 契约时记录警告并保留原生 UI。
+- Mobile Web UI 2.0 增加紧凑手机单栏与触控展开态布局；展开态保留 DSH 导航 rail，侧栏按可用宽度停靠或浮层显示，右栏适配手机与展开态。
+- 增加 VisualViewport 键盘避让、安全区、输入框滚动、原生 header action 保留、菜单 / 设置语义适配，以及 Escape / Android 返回和边缘滑动操作。
+- 将 DOM 探测与 MutationObserver 更新合并到 animation frame，并提供不含会话内容的 `window.__dshMobileSkin.getState()` 诊断信息。
+- 新增 `plugins/dsh-mobile-harness/MOBILE-UI.md`，记录宿主契约、适配器维护和 Find N5 手工检查清单；文档清单不代表已完成真机验证。
+
 ## 1.1.0 — 2026-11-04
 
 **第五个入口：局域网 / 虚拟组网**
