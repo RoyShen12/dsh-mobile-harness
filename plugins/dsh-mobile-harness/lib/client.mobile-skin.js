@@ -353,7 +353,7 @@ function setupMobileSkin(css) {
         historyClosing = true
         history.back()
       }
-      if (focusReturn instanceof HTMLElement && focusReturn.isConnected && !focusReturn.closest('[inert]')) focusReturn.focus({ preventScroll: true })
+      if (focusReturn instanceof HTMLElement && focusReturn.isConnected && !focusReturn.closest('[inert]') && !editableElement(focusReturn)) focusReturn.focus({ preventScroll: true })
       focusReturn = null
     }
     if (next) {
