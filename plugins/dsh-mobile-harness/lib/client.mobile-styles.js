@@ -130,10 +130,14 @@ html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="header-corne
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex: 0 0 auto;
+  gap: 4px;
   min-block-size: 44px;
-  max-inline-size: 48px;
-  overflow-x: auto;
-  scrollbar-width: none;
+}
+
+html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="header-utilities"] :is([class*="_split"], [class*="_menuA"]),
+html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="header"] :is([aria-label*="访达"], [aria-label*="资源管理器"], [aria-label*="Finder"], [aria-label*="File Explorer"]) {
+  display: none !important;
 }
 
 html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="header-corner"]:empty,
@@ -288,7 +292,7 @@ html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="rightbar"] [
 }
 
 html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="sidebar"] :is(button, [role="button"], [role="menuitem"]),
-html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="rightbar"] :is(button, [role="button"], [role="menuitem"]),
+html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="rightbar"] :is(button:not(button button), [role="button"]:not(button [role="button"]), [role="menuitem"]),
 html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="header"] :is(button, [role="button"]),
 html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="menu"] :is(button, [role="button"], [role="menuitem"]) {
   min-block-size: 44px;
@@ -385,6 +389,38 @@ html[data-dru-mobile][data-dru-skin-state="ready"] .dru-mobile-launcher :is(svg,
   block-size: 22px;
   max-inline-size: 100%;
   color: currentColor;
+}
+
+html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="rightbar"]:has([data-sidebar-right-toggle]) ~ .dru-mobile-panel-close {
+  display: none !important;
+}
+
+html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="rightbar"] :is([data-sidebar-right-toggle], [data-sidebar-right-mode]) {
+  position: relative;
+}
+
+html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="rightbar"] :is([data-sidebar-right-toggle], [data-sidebar-right-mode])::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+}
+
+html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="rightbar"] [class*="_titleRow"] button {
+  position: relative;
+  min-block-size: 0 !important;
+  block-size: auto;
+  min-inline-size: 24px !important;
+}
+
+html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="rightbar"] [class*="_titleRow"] button::after {
+  content: "";
+  position: absolute;
+  inset: -12px -10px;
+}
+
+html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="menu"] [role="menuitem"] {
+  display: flex;
+  align-items: center;
 }
 
 html[data-dru-mobile][data-dru-skin-state="ready"] .dru-mobile-backdrop {

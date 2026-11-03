@@ -890,7 +890,8 @@ export class GatewayProxy {
     const fetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase()
     if (fetchSite === 'cross-site' && (upgrade || sessionCookie || unsafe)) return false
     if (upgrade && typeof origin !== 'string') return false
-    if (typeof this.options.getPublicUrl?.() !== 'string' && this.options.getTunnelMode?.() && this.options.getTunnelMode() !== 'none' && origin === undefined && referer === undefined) {
+    const userNavigation = !upgrade && !unsafe && fetchSite === 'none'
+    if (!userNavigation && typeof this.options.getPublicUrl?.() !== 'string' && this.options.getTunnelMode?.() && this.options.getTunnelMode() !== 'none' && origin === undefined && referer === undefined) {
       return false
     }
     if (origin !== undefined) return typeof origin === 'string' && this.allowedOrigin(origin)
