@@ -964,6 +964,32 @@ html[data-dru-mobile][data-dru-skin-state="ready"].dru-overlay-open body {
     touch-action: manipulation;
   }
 
+  html[data-dru-mobile][data-dru-skin-state="ready"] [role="treeitem"][data-row-key^="session:"] [class*="_rowActions"] {
+    display: inline-flex !important;
+    position: static !important;
+    flex: 0 0 auto;
+    align-items: center;
+    inline-size: auto !important;
+    max-inline-size: none !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
+  }
+
+  html[data-dru-mobile][data-dru-skin-state="ready"] [role="treeitem"][data-row-key^="session:"] [class*="_rowActions"] > div {
+    display: none !important;
+  }
+
+  html[data-dru-mobile][data-dru-skin-state="ready"] [role="treeitem"][data-row-key^="workspace:"] button {
+    position: relative;
+  }
+
+  html[data-dru-mobile][data-dru-skin-state="ready"] [role="treeitem"][data-row-key^="workspace:"] button::after {
+    content: "";
+    position: absolute;
+    inset: -10px;
+  }
+
   html[data-dru-mobile][data-dru-skin-state="ready"] [data-conversation-scroll] :is(button[aria-label*="Copy"], button[aria-label*="copy"], button[aria-label*="复制"], button[aria-label*="Retry"], button[aria-label*="retry"], button[aria-label*="重试"], button[aria-label*="Delete"], button[aria-label*="delete"], button[aria-label*="删除"], button[title*="Copy"], button[title*="复制"], button[title*="Retry"], button[title*="重试"]) {
     opacity: 1 !important;
     visibility: visible !important;
