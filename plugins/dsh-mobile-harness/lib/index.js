@@ -75,8 +75,7 @@ function idleSnapshot(message) {
     tunnel: 'tailscale',
     publicUrl: null,
     lastPublicUrl: null,
-    password: '',
-    passwordEnabled: false,
+    passwordEnabled: true,
     qrText: null,
     qr: null,
     proxyPort: null,
@@ -85,7 +84,6 @@ function idleSnapshot(message) {
     clients: 0,
     since: null,
     lastError: message,
-    stateDir: null,
     webPort: null,
     tailscale: { dnsName: null, backendState: 'Unknown', available: false },
     cloudflare: { state: 'idle', url: null, binary: 'missing', downloadPercent: null, lastError: null, restarts: 0, pid: null }
@@ -95,6 +93,14 @@ function idleSnapshot(message) {
 export function apply(ctx) {
   /** @type {RemoteService | null} */
   let service = null
+
+  const register = (route) => ctx.connection.fetch.register({
+    ...route,
+    fetch: async (request) => {
+      if (request.headers.get('x-dsh-mobile-remote')) return json({ error: 'local-management-only' }, 403)
+      return route.fetch(request)
+    }
+  })
 
   ctx.effect(() => {
     const created = new RemoteService(ctx)
@@ -118,7 +124,7 @@ export function apply(ctx) {
 
   ctx.effect(
     () =>
-      ctx.connection.fetch.register({
+      register({
         path: STATUS_PATH,
         methods: ['GET'],
         requestBody: 'buffered',
@@ -138,7 +144,7 @@ export function apply(ctx) {
 
   ctx.effect(
     () =>
-      ctx.connection.fetch.register({
+      register({
         path: TOGGLE_PATH,
         methods: ['POST'],
         requestBody: 'buffered',
@@ -171,7 +177,7 @@ export function apply(ctx) {
 
   ctx.effect(
     () =>
-      ctx.connection.fetch.register({
+      register({
         path: EXTERNAL_PATH,
         methods: ['POST'],
         requestBody: 'buffered',
@@ -200,7 +206,7 @@ export function apply(ctx) {
   // binary (~50 MB) and force a reconnect when the host stops responding.
   ctx.effect(
     () =>
-      ctx.connection.fetch.register({
+      register({
         path: CLOUDFLARED_PATH,
         methods: ['POST'],
         requestBody: 'buffered',
@@ -472,7 +478,7 @@ export function apply(ctx) {
 
   ctx.effect(
     () =>
-      ctx.connection.fetch.register({
+      register({
         path: DEVICES_PATH,
         methods: ['POST'],
         requestBody: 'buffered',
@@ -496,7 +502,7 @@ export function apply(ctx) {
 
   ctx.effect(
     () =>
-      ctx.connection.fetch.register({
+      register({
         path: RESET_PATH,
         methods: ['POST'],
         requestBody: 'buffered',
@@ -514,7 +520,7 @@ export function apply(ctx) {
 
   ctx.effect(
     () =>
-      ctx.connection.fetch.register({
+      register({
         path: PASSWORD_PATH,
         methods: ['POST'],
         requestBody: 'buffered',
@@ -526,10 +532,15 @@ export function apply(ctx) {
           } catch {
             body = {}
           }
-          if (typeof body?.enabled === 'boolean') return json(service.setPasswordEnabled(body.enabled))
-          const password = typeof body?.password === 'string' ? body.password : undefined
-          const result = await service.rotatePassword(password)
-          return json(result)
+          try {
+            if (body?.action === 'reveal') return json({ password: service.state.password })
+            if (typeof body?.enabled === 'boolean') return json(service.setPasswordEnabled(body.enabled))
+            const password = typeof body?.password === 'string' ? body.password : undefined
+            const result = await service.rotatePassword(password)
+            return json(result)
+          } catch (error) {
+            return json({ error: error instanceof Error ? error.message : String(error) }, 400)
+          }
         }
       }),
     'dsh-mobile-harness: password route'

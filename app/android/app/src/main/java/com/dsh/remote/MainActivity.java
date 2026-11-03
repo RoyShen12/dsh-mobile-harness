@@ -27,22 +27,15 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.security.cert.X509Certificate;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
-
 /**
  * Thin Capacitor shell for the DeepSeek Harness remote UI.
  *
- * The tunnel (SakuraFrp) terminates TLS with an automatically generated certificate, so the
- * WebView's default client would block the page. We keep Capacitor's client behavior and only
- * override SSL errors for an allow-list of tunnel hosts; everything else is still rejected.
+ * Remote HTTPS uses Android's platform trust store and hostname validation. Invalid certificates
+ * are rejected for both the WebView and the native admission/device-channel requests.
  */
 public class MainActivity extends BridgeActivity {
 
@@ -414,13 +407,8 @@ public class MainActivity extends BridgeActivity {
 
         private VerifyResult post(String base, String path, String payload, String installationId) throws Exception {
             URL url = new URL(base + path);
-            if (!isTunnelHost(url.getHost())) throw new Exception("host not allowed");
+            if (!isTunnelUrl(url)) throw new Exception("host or transport not allowed");
             HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-            if (connection instanceof HttpsURLConnection) {
-                HttpsURLConnection https = (HttpsURLConnection) connection;
-                https.setSSLSocketFactory(trustAllContext().getSocketFactory());
-                https.setHostnameVerifier((hostname, session) -> true);
-            }
             connection.setConnectTimeout(12000);
             connection.setReadTimeout(12000);
             connection.setRequestMethod("POST");
@@ -628,18 +616,6 @@ public class MainActivity extends BridgeActivity {
             notifyPage("window.__dshConnectResult && window.__dshConnectResult(\"expired\")");
         }
 
-        private SSLContext trustAllContext() throws Exception {
-            TrustManager[] managers = new TrustManager[] {
-                new X509TrustManager() {
-                    public void checkClientTrusted(X509Certificate[] chain, String authType) {}
-                    public void checkServerTrusted(X509Certificate[] chain, String authType) {}
-                    public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
-                }
-            };
-            SSLContext context = SSLContext.getInstance("TLS");
-            context.init(null, managers, new java.security.SecureRandom());
-            return context;
-        }
     }
 
     /** Scheme + authority of a page URL, with a trailing slash (the gateway's own root). */
@@ -666,6 +642,14 @@ public class MainActivity extends BridgeActivity {
         if (value.endsWith(".ts.net")) return true;
         if (value.endsWith(".trycloudflare.com") || value.endsWith(".cfargotunnel.com")) return true;
         return isPrivateIpv4(value);
+    }
+
+    static boolean isTunnelUrl(URL url) {
+        if (url == null || url.getUserInfo() != null || !isTunnelHost(url.getHost())) return false;
+        String protocol = url.getProtocol().toLowerCase(Locale.ROOT);
+        if ("https".equals(protocol)) return true;
+        String host = url.getHost().toLowerCase(Locale.ROOT);
+        return "http".equals(protocol) && (host.equals("localhost") || host.equals("127.0.0.1") || isPrivateIpv4(host));
     }
 
     /** 10.x / 172.16-31.x / 192.168.x: no tunnel at all, phone and PC on the same Wi-Fi. */
@@ -731,17 +715,7 @@ public class MainActivity extends BridgeActivity {
 
         @Override
         public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
-            String host = null;
-            try {
-                host = new URL(error.getUrl()).getHost();
-            } catch (Exception ignored) {
-                // fall through to cancel
-            }
-            if (isTunnelHost(host)) {
-                handler.proceed();
-            } else {
-                handler.cancel();
-            }
+            handler.cancel();
         }
     }
 }

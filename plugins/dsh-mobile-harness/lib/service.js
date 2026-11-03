@@ -15,6 +15,7 @@ import { findTailscale, readStatus, serveOn80, stopServe80, publicUrlFor } from 
 import { qrMatrix } from './qr.js'
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { collectLanAddresses, pickLanAddress } from './lan.js'
 import { listPool, saveUpload, openFile, removeFile, ensurePool, MAX_UPLOAD_BYTES, POOL_DIR } from './files.js'
 import { pickFolder, hasNativePicker } from './picker.js'
@@ -48,13 +49,13 @@ export function compareVersions(left, right) {
 }
 
 /**
- * Append the one-time scan ticket to the public URL the QR encodes. The address itself keeps the
- * trailing slash the relays hand out, so the ticket lands as "?t=…" on the root path.
+ * Keep the one-time ticket in the fragment, outside HTTP request URLs and relay logs.
  */
 function withScanTicket(url, ticket) {
   if (!url || !ticket) return url || null
-  const glue = url.includes('?') ? '&' : '?'
-  return url + glue + 't=' + ticket
+  const parsed = new URL(url)
+  parsed.hash = new URLSearchParams({ t: ticket }).toString()
+  return parsed.toString()
 }
 
 export class RemoteService {
@@ -64,6 +65,7 @@ export class RemoteService {
   constructor(ctx) {
     this.ctx = ctx
     this.state = loadState()
+    this.managementKey = randomBytes(32)
     this.phase = /** @type {RemotePhase} */ ('disabled')
     this.publicUrl = null
     this.lastPublicUrl = null
@@ -97,6 +99,7 @@ export class RemoteService {
     // It lives in the service so the panel, the gateway and the `phone` tool share one queue.
     this.bridge = new DeviceBridge({
       registry: this.registry,
+      resolveDeviceReference: (reference) => this.resolveDeviceReference(reference),
       log: (message) => this.log(message)
     })
     this.proxy = new GatewayProxy({
@@ -107,7 +110,6 @@ export class RemoteService {
       // Per-device override (a phone that picked its own layout); null falls back to getUiMode.
       getDeviceUiMode: (deviceId) => this.deviceUiMode(deviceId),
       verifyPassword: (candidate) => this.verifyPassword(candidate),
-      passwordEnabled: () => this.state.passwordEnabled === true,
       addSession: (record) => this.addSession(record),
       findSession: (id) => this.state.sessions.find((entry) => entry.id === id),
       touchSession: (record) => this.touchSession(record),
@@ -119,7 +121,9 @@ export class RemoteService {
       unblacklistDevice: (deviceId) => this.removeBlacklist(deviceId),
       registry: this.registry,
       deviceBridge: this.bridge,
-      sessionSecret: Buffer.from(this.state.secret, 'base64url'),
+      getSessionSecret: () => Buffer.from(this.state.secret, 'base64url'),
+      getPublicUrl: () => this.publicUrl,
+      getTunnelMode: () => this.state.tunnel,
       log: (message) => this.log(message)
     })
     // Cloudflare quick tunnel: the zero-config public entry. Nothing starts here — the tunnel is
@@ -253,12 +257,9 @@ export class RemoteService {
 
   verifyPassword(candidate) {
     if (typeof candidate !== 'string' || typeof this.state.password !== 'string') return false
-    const a = Buffer.from(candidate)
-    const b = Buffer.from(this.state.password)
-    if (a.length !== b.length) return false
-    let diff = 0
-    for (let i = 0; i < a.length; i += 1) diff |= a[i] ^ b[i]
-    return diff === 0
+    const submitted = Buffer.from(candidate)
+    const expected = Buffer.from(this.state.password)
+    return submitted.length === expected.length && timingSafeEqual(submitted, expected)
   }
 
   webPort() {
@@ -329,6 +330,7 @@ export class RemoteService {
       const started = [...scope.matchAll(/(\d{4}[-/]\d{2}[-/]\d{2}\s+\d{2}:\d{2}:\d{2})[^\n]*?隧道启动成功/g)].pop()
       const startedAt = started ? started[1].replace(/\//g, '-') : null
       const refusedNow = Boolean(localPortAt) && (!startedAt || localPortAt >= startedAt)
+      if (!tls) return null
       return {
         url: `${tls ? 'https' : 'http'}://${endpoint}/`,
         endpoint,
@@ -402,7 +404,8 @@ export class RemoteService {
     } catch {
       throw new Error('网址格式无效，示例：https://frp-cat.com:12345/')
     }
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') throw new Error('只支持 http/https 网址')
+    if (parsed.protocol !== 'https:') throw new Error('外部隧道必须使用 HTTPS')
+    if (parsed.username || parsed.password || parsed.pathname !== '/') throw new Error('请填写无用户名、密码或路径的 HTTPS 入口地址')
     parsed.hash = ''
     parsed.search = ''
     if (!parsed.pathname.endsWith('/')) parsed.pathname = parsed.pathname + '/'
@@ -506,6 +509,26 @@ export class RemoteService {
     return []
   }
 
+  deviceReference(deviceId) {
+    if (!deviceId) return null
+    return createHmac('sha256', this.managementKey).update(String(deviceId)).digest('base64url')
+  }
+
+  resolveDeviceReference(reference) {
+    if (typeof reference !== 'string') return ''
+    const record = this.registry.list().find((entry) => this.deviceReference(entry.deviceId) === reference)
+    return record?.deviceId ?? ''
+  }
+
+  managementReferences(value) {
+    if (Array.isArray(value)) return value.map((entry) => this.managementReferences(entry))
+    if (!value || typeof value !== 'object') return value
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [
+      key,
+      key === 'deviceId' ? this.deviceReference(entry) : this.managementReferences(entry)
+    ]))
+  }
+
   /**
    * Panel API: the approval queue and the device list.
    *
@@ -517,7 +540,7 @@ export class RemoteService {
    */
   handleDevices(body) {
     const action = typeof body?.action === 'string' ? body.action : ''
-    const deviceId = typeof body?.deviceId === 'string' ? body.deviceId : ''
+    const deviceId = this.resolveDeviceReference(body?.deviceId)
     if (action === 'revoke' && typeof body?.id === 'string') this.proxy.revokeSession(body.id)
     else if (action === 'revokeAll') {
       // "全部下线" = close every session AND drop the trust, so the next login has to be
@@ -630,11 +653,11 @@ export class RemoteService {
         label: latest?.label || '未知设备',
         client: latest?.client === 'app' ? 'app' : 'web',
         clientVersion: latest?.clientVersion || '',
-        state: 'trusted',
+        state: 'revoked',
+        trusted: false,
         uiMode: null,
-        trusted: true,
         blocked: false,
-        revoked: false,
+        revoked: true,
         online: onlineIds.has(key),
         activeSessions: sessions.filter((entry) => !entry.revoked).length,
         firstSeen: latest?.issuedAt ?? null,
@@ -949,17 +972,16 @@ export class RemoteService {
     const lanSelected = this.state.lanAddress && lanList.some((entry) => entry.address === this.state.lanAddress)
       ? this.state.lanAddress
       : lanList[0]?.address ?? null
-    const password = this.state.password || ''
-    // The QR carries a one-time scan ticket (?t=), never the password: the ticket is burnt by the
-    // first scan and expires after ten minutes, so a screenshot of the panel stops working —
-    // while one scan still drops the browser straight in (it is the owner's own screen).
+    // The QR carries a one-time scan ticket, never the password: the ticket is burnt after
+    // admission accepts it and expires after ten minutes, so a screenshot of the panel stops
+    // working — while one scan still drops the browser straight in (it is the owner's own screen).
     const ticket = enabled && this.publicUrl ? this.proxy.currentTicket?.() ?? null : null
     const qrText = enabled && this.publicUrl ? withScanTicket(this.publicUrl, ticket) : null
     let qr = null
     if (qrText) {
       qr = qrMatrix(qrText)
     }
-    return {
+    return this.managementReferences({
       pluginVersion: PLUGIN_VERSION,
       // Last npm answer, if the panel already asked; the tab bar reads it without another request.
       update: this.updateCache?.value ?? null,
@@ -986,14 +1008,13 @@ export class RemoteService {
       // Only meaningful on 'auto': the mode the last phone/tablet request actually got.
       uiModeProbe: this.state.uiMode === 'auto' ? (this.proxy.uiModeEffective?.() ?? null) : null,
       lastPublicUrl: this.lastPublicUrl,
-      password,
       qrText,
       qrTicketExpiresAt: enabled && ticket ? (this.proxy.ticketDeadline?.() ?? null) : null,
       qr,
       proxyPort: this.proxy.port ?? this.state.proxyPort ?? null,
       tlsPort: this.proxy.tlsPort ?? null,
       externalUrl: this.state.externalUrl ?? null,
-      passwordEnabled: this.state.passwordEnabled === true,
+      passwordEnabled: true,
       clients: enabled ? this.proxy.pageCount() : 0,
       devices: enabled ? this.proxy.deviceCount() : 0,
       deviceList: this.buildDeviceList(enabled),
@@ -1030,7 +1051,6 @@ export class RemoteService {
       pages: enabled ? this.proxy.pageCount() : 0,
       since: this.since,
       lastError: this.lastError,
-      stateDir: this.stateDir,
       webPort: this.webPort(),
       tailscale: {
         dnsName: this.tailscale.dnsName,
@@ -1038,7 +1058,7 @@ export class RemoteService {
         available: Boolean(this.tailscale.exe)
       },
       cloudflare: this.cloudflared.snapshot()
-    }
+    })
   }
 
   /**
@@ -1063,7 +1083,7 @@ export class RemoteService {
         enabled,
         busy: Boolean(this.busy),
         since: this.since,
-        lastError: this.lastError
+        lastError: this.lastError ? 'gateway-transition-failed' : null
       },
       gateway: {
         proxyPort: this.proxy.port ?? this.state.proxyPort ?? null,
@@ -1074,7 +1094,7 @@ export class RemoteService {
         cloudflareHost: hostOf(this.cloudflared.url),
         publicHost: hostOf(this.publicUrl),
         lastPublicHost: hostOf(this.lastPublicUrl),
-        passwordEnabled: this.state.passwordEnabled === true,
+        passwordEnabled: true,
         onlineDevices: enabled ? this.proxy.onlineDeviceIds().size : 0,
         onlinePages: enabled ? this.proxy.pageCount() : 0
       },
@@ -1108,7 +1128,7 @@ export class RemoteService {
           authorized: entry.authorized,
           online: entry.online,
           lastOp: entry.lastOp,
-          lastError: entry.lastError ? String(entry.lastError).slice(0, 80) : null
+          lastError: entry.lastError ? 'device-operation-failed' : null
         })),
         trace: this.bridge.snapshot().trace.slice(0, 8).map((entry) => ({ kind: entry.kind, op: entry.op, ms: entry.ms }))
       },
@@ -1117,8 +1137,7 @@ export class RemoteService {
         action: entry.action,
         label: entry.label,
         actor: entry.actor
-      })),
-      storage: { stateDir: this.stateDir }
+      }))
     }
   }
 
@@ -1269,7 +1288,12 @@ export class RemoteService {
           saveState(this.state)
         }
       }
-      this.publicUrl = this.state.externalUrl || `http://127.0.0.1:${boundPort}/`
+      if (!this.state.externalUrl) throw new Error('请先配置 HTTPS 外部隧道地址')
+      const external = new URL(this.state.externalUrl)
+      if (external.protocol !== 'https:' || external.username || external.password || external.pathname !== '/') {
+        throw new Error('外部隧道必须使用无凭据和路径的 HTTPS 地址，请重新保存入口')
+      }
+      this.publicUrl = external.toString()
     } else if (this.state.tunnel === 'lan') {
       const primary = this.preferredLanAddress()
       this.publicUrl = `http://${primary ?? '127.0.0.1'}:${boundPort}/`
@@ -1317,31 +1341,30 @@ export class RemoteService {
     }
   }
 
-  /** @param {string} [password] */
-  /**
-   * Toggle the password gate. Disabled = transparent gateway (no login page, access by URL).
-   * @param {boolean} enabled
-   */
   setPasswordEnabled(enabled) {
-    this.state.passwordEnabled = enabled === true
+    if (enabled !== true) throw new Error('网关始终要求密码或一次性扫码票据')
+    this.state.passwordEnabled = true
     saveState(this.state)
     return this.snapshot()
   }
 
   async rotatePassword(password) {
-    const next = typeof password === 'string' && password.length >= 8 ? password : randomPassword(9)
-    this.proxy.resetTicket?.()
-    this.state.password = next
-    // Rotate the session secret too: every paired device must log in with the new password.
-    this.state.secret = randomSecret()
-    saveState(this.state)
-    const wasEnabled = this.phase === 'enabled'
-    if (wasEnabled) {
-      // Restart the gateway so the new secret takes effect.
-      await this.setEnabled(false)
-      await this.setEnabled(true)
+    if (password !== undefined && (typeof password !== 'string' || password.length < 12 || password.length > 128)) {
+      throw new Error('密码长度需为 12–128 个字符')
     }
-    return { password: next, snapshot: this.snapshot() }
+    return this.serialize(async () => {
+      const next = password ?? randomPassword(12)
+      this.proxy.revokeAllSessions()
+      this.bridge.dropAll('网关密码已重置')
+      this.registry.revokeAll('password-reset')
+      this.state.password = next
+      this.state.passwordEnabled = true
+      this.state.secret = randomSecret()
+      this.proxy.resetAuthentication?.()
+      this.proxy.resetTicket?.()
+      saveState(this.state)
+      return { snapshot: this.snapshot() }
+    })
   }
 
   async init() {

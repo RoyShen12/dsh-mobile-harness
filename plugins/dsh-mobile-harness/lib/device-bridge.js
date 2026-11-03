@@ -15,7 +15,7 @@
  *
  * P1 exposes only `status`. Screen reading and tapping land in P2 on top of this same channel.
  */
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 
 /** How long one poll request is held open. Shorter than the 30 s gateway idleness. */
 export const POLL_WAIT_MS = 25000
@@ -30,6 +30,41 @@ export const MAX_TRACE_ENTRIES = 60
 
 /** Ops the host is allowed to put on the wire. Anything else is a programming error, not input. */
 const KNOWN_OPS = new Set(['status', 'screen', 'tap', 'long_press', 'type', 'key', 'scroll', 'open_app'])
+const SNAPSHOT_OPS = new Set(['tap', 'long_press', 'type', 'key', 'scroll', 'open_app'])
+const DEVICE_CLIENT_ID_PATTERN = /^[A-Za-z0-9_-]{12,128}$/
+const SNAPSHOT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
+const PACKAGE_NAME_PATTERN = /^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/
+const BLOCKED_PACKAGES = new Set([
+  'com.eg.android.alipaygphone',
+  'com.unionpay',
+  'com.icbc',
+  'com.chinamworld',
+  'com.cmbchina',
+  'cmb.pb',
+  'com.android.bankabc',
+  'com.bankcomm',
+  'com.spdb',
+  'com.ecitic',
+  'com.tencent.mm',
+  'com.tencent.mobileqq',
+  'com.jd.jrapp',
+  'com.android.settings',
+  'com.agilebits.onepassword',
+  'com.onepassword.android',
+  'com.lastpass.lpandroid',
+  'com.x8bit.bitwarden'
+])
+const DEVICE_ERRORS = new Map([
+  ['blocked_by_policy', '手机护栏拒绝了这个操作。'],
+  ['confirm_required', '这个操作需要用户本人确认。'],
+  ['not_accessible', '手机无障碍服务未开启。'],
+  ['device_locked', '手机仍处于锁定状态。'],
+  ['stale_snapshot', '屏幕快照已失效，请重新读取屏幕。'],
+  ['bad_target', '目标已失效或不支持，请重新读取屏幕。'],
+  ['action_failed', '手机执行失败。'],
+  ['not_found', '手机上找不到目标应用。'],
+  ['not_supported', '手机不支持这个操作。']
+])
 
 export class DeviceBridge {
   /**
@@ -42,6 +77,9 @@ export class DeviceBridge {
     this.registry = options.registry ?? null
     this.log = typeof options.log === 'function' ? options.log : () => {}
     this.now = typeof options.now === 'function' ? options.now : () => Date.now()
+    this.resolveDeviceReference = typeof options.resolveDeviceReference === 'function'
+      ? options.resolveDeviceReference
+      : (deviceId) => deviceId
     /** @type {Map<string, {lastPollAt: number|null, queue: object[], waiters: object[], lastOp: string|null, lastError: string|null, lastResultAt: number|null}>} */
     this.devices = new Map()
     /** @type {Map<string, {resolve: Function, reject: Function, timer: any, cmd: object, started: number}>} */
@@ -49,6 +87,14 @@ export class DeviceBridge {
     /** @type {object[]} */
     this.trace = []
     this.counter = 0
+    if (this.registry) {
+      const onDisabled = this.registry.onPhoneAssistDisabled
+      this.registry.onPhoneAssistDisabled = () => {
+        onDisabled?.()
+        this.disableChannel()
+      }
+      if (!this.enabled) this.disableChannel()
+    }
   }
 
   /** Owner switch (D1: off until the user turns it on). */
@@ -59,7 +105,7 @@ export class DeviceBridge {
   setEnabled(value) {
     if (!this.registry) return false
     const next = this.registry.setSettings({ phoneAssist: value === true })
-    if (!next.phoneAssist) this.dropAll('手机协助已关闭')
+    if (!next.phoneAssist) this.disableChannel()
     this.log('phone assist ' + (next.phoneAssist ? 'on' : 'off'))
     return next.phoneAssist
   }
@@ -68,7 +114,17 @@ export class DeviceBridge {
   device(deviceId) {
     let state = this.devices.get(deviceId)
     if (!state) {
-      state = { lastPollAt: null, queue: [], waiters: [], lastOp: null, lastError: null, lastResultAt: null }
+      state = {
+        lastPollAt: null,
+        queue: [],
+        waiters: [],
+        lastOp: null,
+        lastError: null,
+        lastResultAt: null,
+        snapshotId: null,
+        snapshotPkg: null,
+        snapshotAt: null
+      }
       this.devices.set(deviceId, state)
     }
     return state
@@ -81,13 +137,16 @@ export class DeviceBridge {
    * @param {string} deviceId
    * @returns {string} the token (caller hands it to the phone, never to a log)
    */
-  issueToken(deviceId) {
+  issueToken(deviceId, clientId) {
     if (!this.registry) throw new Error('设备注册表未就绪')
+    if (!this.enabled) throw new Error('手机协助已关闭')
     const record = this.registry.get(deviceId)
     if (!record) throw new Error('未知设备')
     if (record.state !== 'trusted') throw new Error('设备尚未被允许，不能开通手机协助')
+    const fingerprint = fingerprintClientId(clientId)
+    if (!fingerprint) throw new Error('设备安装标识无效')
     const token = randomBytes(32).toString('base64url')
-    this.registry.setDeviceToken(deviceId, token)
+    if (!this.registry.setDeviceToken(deviceId, token, fingerprint)) throw new Error('设备通道令牌无法保存')
     this.log('phone channel token issued for ' + record.label + ' (' + deviceId.slice(0, 6) + '…)')
     return token
   }
@@ -104,12 +163,17 @@ export class DeviceBridge {
    * @returns {{ok: true, deviceId: string, record: object} | {ok: false, code: string}}
    */
   authorize(req, headerValue) {
-    if (!this.enabled) return { ok: false, code: 'disabled' }
+    if (!this.enabled) {
+      this.disableChannel()
+      return { ok: false, code: 'disabled' }
+    }
     const raw = typeof headerValue === 'string' ? headerValue.trim() : ''
     if (!raw) return { ok: false, code: 'token' }
     const record = this.registry ? this.registry.findByToken(raw) : null
     if (!record) return { ok: false, code: 'token' }
     if (record.state !== 'trusted') return { ok: false, code: 'revoked' }
+    const fingerprint = fingerprintClientId(req?.headers?.['x-dsh-client-id'])
+    if (!fingerprint || !safeEqualHex(record.deviceFingerprint, fingerprint)) return { ok: false, code: 'identity' }
     return { ok: true, deviceId: record.deviceId, record }
   }
 
@@ -122,6 +186,7 @@ export class DeviceBridge {
   poll(deviceId, waitMs = POLL_WAIT_MS) {
     const state = this.device(deviceId)
     state.lastPollAt = this.now()
+    if (state.waiters.length > 0) return Promise.resolve(null)
     if (state.queue.length > 0) {
       const cmd = state.queue.shift()
       this.record('deliver', cmd)
@@ -149,12 +214,17 @@ export class DeviceBridge {
    */
   async call(request) {
     if (!this.enabled) {
+      this.disableChannel()
       throw new Error('手机协助未开启：先在电脑面板「远程 → 设备准入 → 手机协助」打开')
     }
     const op = String(request?.op ?? '')
     if (!KNOWN_OPS.has(op)) throw new Error('手机不支持的指令：' + (op || '(空)'))
-    const deviceId = request?.deviceId || this.defaultDeviceId()
+    const requestedDeviceId = typeof request?.deviceId === 'string' && request.deviceId.length > 0 ? request.deviceId : null
+    const deviceId = requestedDeviceId
+      ? this.resolveDeviceReference(requestedDeviceId)
+      : this.defaultDeviceId()
     if (!deviceId) {
+      if (requestedDeviceId) throw new Error('指定设备不存在或已失效')
       // A trusted phone with no token is not "no phone": the host restarted and the app has not
       // re-minted its channel yet. Say so, or the owner goes hunting for a missing 允许 click.
       if (this.trustedWithoutChannel() > 0) {
@@ -162,12 +232,19 @@ export class DeviceBridge {
       }
       throw new Error('没有已授权的手机：先在手机上连一次并在电脑上点「允许」')
     }
+    this.validateOperation(deviceId, op, request?.args)
     if (!this.isOnline(deviceId)) {
       // D3: no queueing while the phone is away — the agent gets an error it can react to.
       throw new Error('手机不在线：先打开手机上的 DSH Mobile Harness App（手机协助不排队，会直接报错）')
     }
     const timeoutMs = Number(request?.timeoutMs) || COMMAND_TIMEOUT_MS
     const cmd = this.enqueue(deviceId, op, request?.args, timeoutMs)
+    if (SNAPSHOT_OPS.has(op)) {
+      const state = this.devices.get(deviceId)
+      state.snapshotPkg = null
+      state.snapshotId = null
+      state.snapshotAt = null
+    }
     const started = this.now()
     return await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -218,19 +295,64 @@ export class DeviceBridge {
   complete(deviceId, payload) {
     const id = typeof payload?.id === 'string' ? payload.id : ''
     const waiter = id ? this.waiting.get(id) : null
-    if (!waiter) return { ok: false, code: 'unknown-command' }
+    if (!waiter || waiter.deviceId !== deviceId) return { ok: false, code: 'unknown-command' }
     this.waiting.delete(id)
     clearTimeout(waiter.timer)
     const ms = Number(payload?.ms)
     const elapsed = Number.isFinite(ms) && ms >= 0 ? ms : this.now() - waiter.started
-    const failed = payload?.ok === false
-    const error = failed ? String(payload?.error || '手机执行失败') : null
     const state = this.device(deviceId)
-    state.lastError = error
     state.lastResultAt = this.now()
-    this.record(failed ? 'error' : 'ok', waiter.cmd, elapsed, error)
-    waiter.resolve({ ok: !failed, op: waiter.cmd.op, data: payload?.data ?? null, error, ms: elapsed })
+    const data = payload?.data && typeof payload.data === 'object' ? payload.data : null
+    let failed = payload?.ok === false
+    let error = failed ? DEVICE_ERRORS.get(String(payload?.code || '')) || '手机执行失败。' : null
+    if (waiter.cmd.op === 'screen') {
+      if (failed) {
+        state.snapshotPkg = null
+        state.snapshotId = null
+        state.snapshotAt = null
+        state.lastError = error
+        this.record('error', waiter.cmd, elapsed)
+        waiter.resolve({ ok: false, op: waiter.cmd.op, data: null, error, ms: elapsed })
+        return { ok: true }
+      }
+      const pkg = typeof data?.pkg === 'string' && PACKAGE_NAME_PATTERN.test(data.pkg) ? data.pkg : null
+      const snapshotId = typeof data?.snapshotId === 'string' && SNAPSHOT_ID_PATTERN.test(data.snapshotId)
+        ? data.snapshotId
+        : null
+      state.snapshotPkg = pkg
+      state.snapshotId = snapshotId
+      state.snapshotAt = this.now()
+      if (!pkg || !snapshotId || isBlockedPackage(pkg)) {
+        failed = true
+        error = '手机屏幕来源无法确认，或属于受限应用。'
+        state.snapshotPkg = null
+        state.snapshotId = null
+        state.snapshotAt = null
+        state.lastError = error
+        this.record('error', waiter.cmd, elapsed)
+        waiter.resolve({ ok: false, op: waiter.cmd.op, data: null, error, ms: elapsed })
+        return { ok: true }
+      }
+    }
+    state.lastError = error
+    this.record(failed ? 'error' : 'ok', waiter.cmd, elapsed)
+    waiter.resolve({ ok: !failed, op: waiter.cmd.op, data: failed ? null : data, error, ms: elapsed })
     return { ok: true }
+  }
+
+  validateOperation(deviceId, op, args) {
+    if (op === 'open_app') {
+      const target = typeof args?.target === 'string' ? args.target.trim() : ''
+      if (PACKAGE_NAME_PATTERN.test(target) && isBlockedPackage(target)) throw new Error('手机护栏拒绝打开金融或系统敏感应用')
+    }
+    if (!SNAPSHOT_OPS.has(op)) return
+    const state = this.devices.get(deviceId)
+    const snapshotId = typeof args?.snapshotId === 'string' ? args.snapshotId : ''
+    if (!state?.snapshotPkg || !state.snapshotId || !state.snapshotAt || this.now() - state.snapshotAt >= 60000 ||
+        !snapshotId || snapshotId !== state.snapshotId) {
+      throw new Error('此操作需要最新的屏幕快照：先调用 phone screen')
+    }
+    if (isBlockedPackage(state.snapshotPkg)) throw new Error('手机护栏拒绝操作金融或系统敏感应用')
   }
 
   // -- liveness / housekeeping ---------------------------------------------
@@ -283,7 +405,7 @@ export class DeviceBridge {
       if (waiter.deviceId !== deviceId) continue
       this.waiting.delete(id)
       clearTimeout(waiter.timer)
-      this.record('cancelled', waiter.cmd, this.now() - waiter.started, reason)
+      this.record('cancelled', waiter.cmd, this.now() - waiter.started)
       waiter.reject(new Error(reason))
     }
   }
@@ -291,6 +413,11 @@ export class DeviceBridge {
   dropAll(reason = '手机协助已关闭') {
     for (const deviceId of this.devices.keys()) this.dropDevice(deviceId, reason)
     this.devices.clear()
+  }
+
+  disableChannel() {
+    this.dropAll('手机协助已关闭')
+    this.registry?.clearDeviceTokens?.()
   }
 
   /** @returns {object} panel payload: switches, per-device state and the recent trace */
@@ -326,15 +453,36 @@ export class DeviceBridge {
   }
 
   /** Ring buffer of op names and outcomes — never screen text, never typed content. */
-  record(kind, cmd, ms, note = null) {
+  record(kind, cmd, ms) {
     if (!cmd) return
     this.trace.push({
       at: this.now(),
       kind,
       op: cmd.op,
       ms: Number.isFinite(ms) ? Math.max(0, Math.round(ms)) : null,
-      note: note ? String(note).slice(0, 120) : null
+      note: null
     })
     if (this.trace.length > MAX_TRACE_ENTRIES) this.trace.splice(0, this.trace.length - MAX_TRACE_ENTRIES)
   }
+}
+
+function fingerprintClientId(clientId) {
+  if (typeof clientId !== 'string' || !DEVICE_CLIENT_ID_PATTERN.test(clientId)) return null
+  return createHash('sha256').update('dsh-mobile-device\0').update(clientId).digest('hex')
+}
+
+function safeEqualHex(left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string' || !/^[a-f0-9]{64}$/.test(left) || !/^[a-f0-9]{64}$/.test(right)) {
+    return false
+  }
+  return timingSafeEqual(Buffer.from(left, 'hex'), Buffer.from(right, 'hex'))
+}
+
+function isBlockedPackage(value) {
+  if (typeof value !== 'string' || !PACKAGE_NAME_PATTERN.test(value)) return true
+  const normalized = value.toLowerCase()
+  for (const blocked of BLOCKED_PACKAGES) {
+    if (normalized === blocked || normalized.startsWith(blocked + '.')) return true
+  }
+  return false
 }

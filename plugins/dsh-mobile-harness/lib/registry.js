@@ -10,6 +10,8 @@
  *   any --block--> blocked --unblock--> revoked (must be approved again)
  */
 
+import { randomBytes, randomInt } from 'node:crypto'
+
 /** A waiting request disappears after 5 minutes unless the panel decides. */
 export const PENDING_TTL_MS = 5 * 60 * 1000
 /** At most this many devices can wait at once, so a stranger cannot flood the panel. */
@@ -18,11 +20,16 @@ export const MAX_PENDING_REQUESTS = 3
 export const DENIED_GRACE_MS = 60 * 1000
 /** Audit trail length (approve/deny/remove/block decisions). */
 export const MAX_AUDIT_ENTRIES = 200
+export const MAX_DEVICE_RECORDS = 500
+export const DEVICE_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 /** Digits in the short code both screens show so the owner can tell which phone is asking. */
 export const PAIRING_CODE_DIGITS = 6
 
 const VALID_STATES = new Set(['pending', 'trusted', 'revoked', 'blocked'])
+const DEVICE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
+const DEVICE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
+const DEVICE_FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/
 
 /** Viewports a single phone may pick; null means "follow the global default". */
 const UI_MODES = new Set(['auto', 'phone', 'tablet', 'compat'])
@@ -51,6 +58,7 @@ export class DeviceRegistry {
     this.persist = typeof options.persist === 'function' ? options.persist : () => {}
     this.log = typeof options.log === 'function' ? options.log : () => {}
     this.now = typeof options.now === 'function' ? options.now : () => Date.now()
+    this.onPhoneAssistDisabled = null
     if (!Array.isArray(this.state.devices)) this.state.devices = []
     if (!Array.isArray(this.state.pendingRequests)) this.state.pendingRequests = []
     if (!Array.isArray(this.state.audit)) this.state.audit = []
@@ -76,6 +84,15 @@ export class DeviceRegistry {
     if (patch.requireApproval !== undefined) next.requireApproval = patch.requireApproval === true
     if (patch.maxOnlineDevices !== undefined) next.maxOnlineDevices = clampMaxOnlineDevices(patch.maxOnlineDevices)
     if (patch.phoneAssist !== undefined) next.phoneAssist = patch.phoneAssist === true
+    if (patch.phoneAssist === false) {
+      for (const record of this.state.devices) {
+        if (!record) continue
+        record.deviceToken = null
+        record.deviceFingerprint = null
+        record.tokenIssuedAt = null
+      }
+      this.onPhoneAssistDisabled?.()
+    }
     this.state.settings = next
     this.persist()
     return next
@@ -86,9 +103,10 @@ export class DeviceRegistry {
   normalize(raw) {
     const now = this.now()
     const state = VALID_STATES.has(raw.state) ? raw.state : 'pending'
+    const token = typeof raw.deviceToken === 'string' && DEVICE_TOKEN_PATTERN.test(raw.deviceToken) ? raw.deviceToken : null
     return {
       deviceId: String(raw.deviceId),
-      label: typeof raw.label === 'string' && raw.label.length > 0 ? raw.label : '未知设备',
+      label: typeof raw.label === 'string' && raw.label.length > 0 ? raw.label.slice(0, 80) : '未知设备',
       client: raw.client === 'app' ? 'app' : 'web',
       clientVersion: typeof raw.clientVersion === 'string' ? raw.clientVersion.slice(0, 32) : '',
       userAgent: typeof raw.userAgent === 'string' ? raw.userAgent.slice(0, 240) : '',
@@ -104,8 +122,11 @@ export class DeviceRegistry {
       blockedAt: Number(raw.blockedAt) || null,
       // Device-channel credential (agent drives the phone). A token is never shown in the panel or
       // the diagnostics bundle; removing/blocking the device clears it.
-      deviceToken: typeof raw.deviceToken === 'string' && raw.deviceToken.length > 0 ? raw.deviceToken : null,
-      tokenIssuedAt: Number(raw.tokenIssuedAt) || null
+      deviceToken: token,
+      deviceFingerprint: token && typeof raw.deviceFingerprint === 'string' && DEVICE_FINGERPRINT_PATTERN.test(raw.deviceFingerprint)
+        ? raw.deviceFingerprint
+        : null,
+      tokenIssuedAt: token ? Number(raw.tokenIssuedAt) || null : null
     }
   }
 
@@ -116,7 +137,7 @@ export class DeviceRegistry {
 
   /** @returns {object|null} */
   get(deviceId) {
-    if (typeof deviceId !== 'string' || deviceId.length === 0) return null
+    if (typeof deviceId !== 'string' || !DEVICE_ID_PATTERN.test(deviceId)) return null
     return this.state.devices.find((entry) => entry.deviceId === deviceId) || null
   }
 
@@ -126,10 +147,12 @@ export class DeviceRegistry {
    * @param {{label?: string, client?: string, clientVersion?: string, userAgent?: string}} info
    */
   touch(deviceId, info = {}) {
+    if (typeof deviceId !== 'string' || !DEVICE_ID_PATTERN.test(deviceId)) throw new Error('设备标识无效')
     const now = this.now()
     let record = this.get(deviceId)
     let created = false
     if (!record) {
+      if (this.state.devices.length >= MAX_DEVICE_RECORDS) throw new Error('设备记录已满，请先清理旧记录')
       record = this.normalize({ deviceId, ...info, state: 'pending', firstSeen: now, lastSeen: now })
       this.state.devices.push(record)
       created = true
@@ -188,6 +211,7 @@ export class DeviceRegistry {
     record.revokedAt = this.now()
     // A removed device must also lose the ability to drive the phone channel.
     record.deviceToken = null
+    record.deviceFingerprint = null
     record.tokenIssuedAt = null
     this.dropRequestsFor(deviceId)
     this.audit('remove', record, by)
@@ -207,6 +231,7 @@ export class DeviceRegistry {
       record.state = 'revoked'
       record.revokedAt = now
       record.deviceToken = null
+      record.deviceFingerprint = null
       record.tokenIssuedAt = null
       changed += 1
       this.audit('remove', record, by)
@@ -221,6 +246,7 @@ export class DeviceRegistry {
     record.state = 'blocked'
     record.blockedAt = this.now()
     record.deviceToken = null
+    record.deviceFingerprint = null
     record.tokenIssuedAt = null
     this.dropRequestsFor(deviceId)
     this.audit('block', record, by)
@@ -241,10 +267,12 @@ export class DeviceRegistry {
   // -- device channel tokens -------------------------------------------------
 
   /** Bind a fresh 32-byte token to a trusted device. A token is opaque and never displayed. */
-  setDeviceToken(deviceId, token) {
+  setDeviceToken(deviceId, token, fingerprint) {
     const record = this.get(deviceId)
-    if (!record) return null
+    if (!record || typeof token !== 'string' || !DEVICE_TOKEN_PATTERN.test(token) ||
+        typeof fingerprint !== 'string' || !DEVICE_FINGERPRINT_PATTERN.test(fingerprint)) return null
     record.deviceToken = String(token)
+    record.deviceFingerprint = fingerprint
     record.tokenIssuedAt = this.now()
     this.audit('phone-token', record, 'panel')
     this.persist()
@@ -256,20 +284,46 @@ export class DeviceRegistry {
     const record = this.get(deviceId)
     if (!record || !record.deviceToken) return null
     record.deviceToken = null
+    record.deviceFingerprint = null
     record.tokenIssuedAt = null
     this.audit('phone-unpair', record, 'panel')
     this.persist()
     return record
   }
 
+  clearDeviceTokens() {
+    let changed = false
+    for (const record of this.state.devices) {
+      if (!record || !record.deviceToken) continue
+      record.deviceToken = null
+      record.deviceFingerprint = null
+      record.tokenIssuedAt = null
+      changed = true
+    }
+    if (changed) this.persist()
+    return changed
+  }
+
   /** Resolve a device-channel token to its record, in constant time. */
   findByToken(token) {
-    if (typeof token !== 'string' || token.length < 20) return null
+    if (typeof token !== 'string' || !DEVICE_TOKEN_PATTERN.test(token)) return null
+    const now = this.now()
+    let expired = false
+    let found = null
     for (const record of this.state.devices) {
       if (!record || typeof record.deviceToken !== 'string' || record.deviceToken.length === 0) continue
-      if (timingSafeEqualString(record.deviceToken, token)) return record
+      const issuedAt = Number(record.tokenIssuedAt) || 0
+      if (!issuedAt || issuedAt > now + 60000 || now - issuedAt >= DEVICE_TOKEN_TTL_MS) {
+        record.deviceToken = null
+        record.deviceFingerprint = null
+        record.tokenIssuedAt = null
+        expired = true
+        continue
+      }
+      if (timingSafeEqualString(record.deviceToken, token)) found = record
     }
-    return null
+    if (expired) this.persist()
+    return found
   }
 
   /** Forget every device, request and audit row (panel "清空记录"). */
@@ -365,6 +419,9 @@ export class DeviceRegistry {
     if (record) {
       record.state = 'revoked'
       record.revokedAt = request.decidedAt
+      record.deviceToken = null
+      record.deviceFingerprint = null
+      record.tokenIssuedAt = null
       this.audit('deny', record, by)
     }
     this.persist()
@@ -399,15 +456,15 @@ export class DeviceRegistry {
   // -- migration from the 0.3.x state file ----------------------------------
 
   /**
-   * Upgrading must not turn every existing phone into a stranger: whatever appears in the old
-   * sessions list becomes trusted, whatever appears in the old blacklist stays blocked.
+   * Import old sessions once as revoked records; only explicit registry trust survives upgrades.
    */
   migrate() {
     let changed = false
+    const migrateSessions = this.state.deviceRegistryVersion !== 2
     const devices = []
     const seen = new Set()
     for (const raw of this.state.devices ?? []) {
-      if (!raw || typeof raw.deviceId !== 'string' || raw.deviceId.length === 0) {
+      if (!raw || typeof raw.deviceId !== 'string' || !DEVICE_ID_PATTERN.test(raw.deviceId)) {
         changed = true
         continue
       }
@@ -418,28 +475,29 @@ export class DeviceRegistry {
       seen.add(raw.deviceId)
       devices.push(this.normalize(raw))
     }
-    for (const session of this.state.sessions ?? []) {
-      const deviceId = session?.deviceId
-      if (typeof deviceId !== 'string' || deviceId.length === 0 || seen.has(deviceId)) continue
-      seen.add(deviceId)
-      changed = true
-      devices.push(
-        this.normalize({
-          deviceId,
-          label: session.label,
-          client: session.client,
-          clientVersion: session.clientVersion,
-          state: 'trusted',
-          firstSeen: session.issuedAt,
-          lastSeen: session.lastSeen,
-          approvedAt: session.issuedAt,
-          approvedBy: 'migration'
-        })
-      )
+    if (migrateSessions) {
+      for (const session of this.state.sessions ?? []) {
+        const deviceId = session?.deviceId
+        if (typeof deviceId !== 'string' || !DEVICE_ID_PATTERN.test(deviceId) || seen.has(deviceId)) continue
+        seen.add(deviceId)
+        changed = true
+        devices.push(
+          this.normalize({
+            deviceId,
+            label: session.label,
+            client: session.client,
+            clientVersion: session.clientVersion,
+            state: 'revoked',
+            firstSeen: session.issuedAt,
+            lastSeen: session.lastSeen,
+            revokedAt: this.now()
+          })
+        )
+      }
     }
     for (const entry of this.state.blacklist ?? []) {
       const deviceId = entry?.deviceId
-      if (typeof deviceId !== 'string' || deviceId.length === 0) continue
+      if (typeof deviceId !== 'string' || !DEVICE_ID_PATTERN.test(deviceId)) continue
       if (seen.has(deviceId)) {
         const record = devices.find((item) => item.deviceId === deviceId)
         if (record && record.state !== 'blocked') {
@@ -463,9 +521,22 @@ export class DeviceRegistry {
         })
       )
     }
-    this.state.devices = devices
+    const boundedDevices = devices.length > MAX_DEVICE_RECORDS
+      ? devices
+          .map((record, index) => ({ record, index }))
+          .sort((left, right) => Number(right.record.state === 'blocked') - Number(left.record.state === 'blocked') || left.index - right.index)
+          .slice(0, MAX_DEVICE_RECORDS)
+          .sort((left, right) => left.index - right.index)
+          .map(({ record }) => record)
+      : devices
+    if (boundedDevices.length !== devices.length) changed = true
+    this.state.devices = boundedDevices
+    if (migrateSessions) {
+      this.state.deviceRegistryVersion = 2
+      changed = true
+    }
     if (changed) {
-      this.log('device registry migrated (' + devices.length + ' device records)')
+      this.log('device registry migrated (' + boundedDevices.length + ' device records)')
       this.persist()
     }
     return changed
@@ -473,23 +544,23 @@ export class DeviceRegistry {
 }
 
 function randomRequestId() {
-  return 'req-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10)
+  return 'req-' + randomBytes(12).toString('base64url')
 }
 
 /** Length-aware constant-time compare, so a token cannot be guessed byte by byte. */
-function timingSafeEqualString(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false
-  let diff = 0
-  for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
-  return diff === 0
+function timingSafeEqualString(left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string' || left.length !== right.length) return false
+  let difference = 0
+  for (let index = 0; index < left.length; index += 1) difference |= left.charCodeAt(index) ^ right.charCodeAt(index)
+  return difference === 0
 }
 
 /** Six digits, unique among the requests currently waiting. */
 function randomPairingCode(taken) {
   for (let attempt = 0; attempt < 32; attempt += 1) {
     let digits = ''
-    for (let i = 0; i < PAIRING_CODE_DIGITS; i += 1) digits += String(Math.floor(Math.random() * 10))
+    for (let digitIndex = 0; digitIndex < PAIRING_CODE_DIGITS; digitIndex += 1) digits += String(randomInt(0, 10))
     if (!taken || !taken.has(digits)) return digits
   }
-  return String(Date.now()).slice(-PAIRING_CODE_DIGITS)
+  return String(randomInt(0, 10 ** PAIRING_CODE_DIGITS)).padStart(PAIRING_CODE_DIGITS, '0')
 }

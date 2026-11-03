@@ -2,11 +2,9 @@
  * In-process password gateway for the remote-access switch.
  *
  * The phone talks to this loopback listener through Tailscale Serve. The gateway:
- *   - refuses everything until the app has signed in (password +, when required, the pairing
- *     code); no URL query may grant a session;
+ *   - refuses everything until the app has signed in; no URL query may grant a session;
  *   - keeps DSH's own 30-day owner cookie private and injects it upstream;
- *   - rewrites `Host` to the loopback authority and drops `Origin`, so DSH's browser-trust
- *     fence accepts the request (it compares Origin with Host and never sees the tunnel host);
+ *   - validates the public origin before translating it to the loopback authority;
  *   - relays WebSocket upgrades (`/api/remote.mux`) raw.
  */
 import http from 'node:http'
@@ -28,14 +26,26 @@ const HOST_ONLY_API = new Set([
   '/api/dsh-mobile-harness.devices',
   '/api/dsh-mobile-harness.reset'
 ])
-const SESSION_MAX_AGE_SECONDS = 30 * 24 * 3600
+const SESSION_MAX_AGE_SECONDS = 7 * 24 * 3600
+const SESSION_IDLE_TTL_MS = 30 * 60 * 1000
 
 /**
  * Per-browser identity, so the panel can say "1 台设备" instead of counting raw TCP
- * sockets (one page opens many). Issued on login, valid for a year, refreshed by use.
+ * sockets (one page opens many). Issued on login and valid for 30 days.
  */
 const DEVICE_COOKIE = 'dsh-device'
-const DEVICE_MAX_AGE_SECONDS = 365 * 24 * 3600
+const DEVICE_MAX_AGE_SECONDS = 30 * 24 * 3600
+const PENDING_COOKIE = 'dsh-pending'
+const PENDING_MAX_AGE_SECONDS = 5 * 60
+const MAX_PENDING_PROOFS = 2048
+const MAX_BODY_BYTES = 64 * 1024
+const MAX_RUNTIME_DEVICES = 2048
+const MAX_RATE_ENTRIES = 2048
+const MAX_CONNECTIONS = 128
+const MAX_DEVICE_REQUESTS_PER_MINUTE = 120
+const MAX_DEVICE_POLLS = 2
+const AUTH_FAILURE_DELAY_MS = 250
+const MAX_UNKNOWN_BACKOFF_MS = 1000
 /** A device without an open page counts as online this long after its last request. */
 const DEVICE_IDLE_TTL_MS = 60000
 /** A device without an open page only counts as online for this long after its last request. */
@@ -48,10 +58,10 @@ const DEVICE_RECENT_MS = 15000
  */
 const TICKET_TTL_MS = 10 * 60 * 1000
 
-/** Wrong-password budget per device and globally, inside one window (brute-force guard). */
+/** Wrong-password budget per device and known source, inside one window. */
 const FAILURE_WINDOW_MS = 5 * 60 * 1000
 const FAILURE_LIMIT_PER_DEVICE = 5
-const FAILURE_LIMIT_GLOBAL = 20
+const FAILURE_LIMIT_PER_SOURCE = 50
 
 const CANDIDATE_PORTS = [
   64700, 64701, 64702, 64800, 64801, 64900, 64901, 50100, 50101, 50200, 50201, 55100, 55101
@@ -75,7 +85,7 @@ function readCookie(req, name) {
  * @param {object} options
  * @param {() => Promise<string>} options.getDshCookie resolves the `dsh-auth-…=…` header
  * @param {(candidate: string) => boolean} options.verifyPassword
- * @param {Buffer} options.sessionSecret HMAC key persisted across restarts
+ * @param {() => Buffer} options.getSessionSecret HMAC key persisted across restarts
  * @param {(message: string) => void} [options.log]
  */
 
@@ -172,6 +182,54 @@ function parseFormBody(text, contentType) {
   return out
 }
 
+function safeEqualText(left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string') return false
+  const leftBuffer = Buffer.from(left)
+  const rightBuffer = Buffer.from(right)
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer)
+}
+
+function canonicalPath(pathname) {
+  if (typeof pathname !== 'string' || pathname.length > 4096) return null
+  let decoded = pathname
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    let next
+    try {
+      next = decodeURIComponent(decoded)
+    } catch {
+      return null
+    }
+    if (next === decoded) break
+    decoded = next
+  }
+  if (/%[0-9a-f]{2}/i.test(decoded)) return null
+  const segments = []
+  for (const segment of decoded.replace(/\\/g, '/').split('/')) {
+    if (!segment || segment === '.') continue
+    if (segment === '..') {
+      segments.pop()
+      continue
+    }
+    segments.push(segment)
+  }
+  return '/' + segments.join('/')
+}
+
+function isPluginManagementPath(pathname) {
+  const path = canonicalPath(pathname)
+  return Boolean(path && /^\/api\/dsh-mobile-harness(?:\.|\/|$)/i.test(path))
+}
+
+function jsonResponseEnded(res) {
+  return res.writableEnded || res.destroyed
+}
+
+function parseIp(value) {
+  if (typeof value !== 'string') return null
+  const candidate = value.trim().replace(/^\[|\]$/g, '')
+  return net.isIP(candidate) ? candidate.toLowerCase() : null
+}
+
 export class GatewayProxy {
   constructor(options) {
     this.options = options
@@ -191,13 +249,17 @@ export class GatewayProxy {
     this.upstreamAgent = new http.Agent({ keepAlive: true, maxSockets: 64, keepAliveMsecs: 30000 })
     /** sessionId -> Set<socket> so a revoked device is disconnected immediately. */
     this.sessionSockets = new Map()
-    /** deviceId -> { count, firstAt }: failed /__verify attempts inside the current window. */
     this.failures = new Map()
     /** Last phone/tablet navigation: what "auto" resolved to ({ mode, at, label }). */
     this.uiProbe = null
-    /** The one live scan ticket (see TICKET_TTL_MS); burnt on the first scan. */
+    this.pendingProofs = new Map()
+    this.deviceTraffic = new Map()
+    /** The one live scan ticket (see TICKET_TTL_MS); burnt after admission accepts it. */
     this.ticket = null
     this.ticketExpiresAt = 0
+    this.unknownFailureWindowAt = 0
+    this.unknownFailureCount = 0
+    this.ticketClaim = null
   }
 
   /** What the gateway resolved for the most recent phone/tablet navigation (null = none yet). */
@@ -221,19 +283,185 @@ export class GatewayProxy {
     return this.ticket ? this.ticketExpiresAt : 0
   }
 
-  /** Burn the ticket: used after a successful scan, a password rotation or a switch-off. */
+  getSessionSecret() {
+    const secret = this.options.getSessionSecret?.() ?? this.options.sessionSecret
+    if (!Buffer.isBuffer(secret) || secret.length < 32) throw new Error('gateway session secret unavailable')
+    return secret
+  }
+
+  deriveSecret(namespace) {
+    return createHmac('sha256', this.getSessionSecret()).update(namespace).digest()
+  }
+
+  /** Burn the ticket and invalidate every pending login proof. */
   resetTicket() {
     this.ticket = null
     this.ticketExpiresAt = 0
+    this.ticketClaim = null
+    this.pendingProofs.clear()
+    this.failures.clear()
+    this.deviceTraffic.clear()
+    this.unknownFailureWindowAt = 0
+    this.unknownFailureCount = 0
   }
 
-  /** @returns {boolean} true only for the live ticket, which is consumed on the spot */
-  consumeTicket(value) {
-    if (typeof value !== 'string' || value.length === 0) return false
-    if (!this.ticket || this.ticketExpiresAt <= Date.now()) return false
-    if (value !== this.ticket) return false
+  resetAuthentication() {
     this.resetTicket()
+  }
+
+  /** @returns {boolean} true only for the current unexpired ticket */
+  validTicket(value, deviceId) {
+    if (typeof value !== 'string' || value.length === 0) return false
+    const now = Date.now()
+    if (!this.ticket || this.ticketExpiresAt <= now) return false
+    this.pruneTicketClaim(now)
+    if (!safeEqualText(value, this.ticket)) return false
+    if (this.ticketClaim && deviceId !== undefined && this.ticketClaim.deviceId !== deviceId) return false
     return true
+  }
+
+  pruneTicketClaim(now = Date.now()) {
+    const claim = this.ticketClaim
+    if (!claim) return
+    if (claim.expiresAt <= now) {
+      this.ticketClaim = null
+      return
+    }
+    const request = this.registry?.getRequest(claim.requestId)
+    const record = this.registry?.get(claim.deviceId)
+    if (request?.status === 'denied' || (!request && record?.state !== 'trusted')) this.ticketClaim = null
+  }
+
+  consumeTicket(value, deviceId, requestId) {
+    if (!this.validTicket(value, deviceId)) return false
+    if (this.ticketClaim && this.ticketClaim.requestId !== requestId) return false
+    this.ticket = null
+    this.ticketExpiresAt = 0
+    this.ticketClaim = null
+    return true
+  }
+
+  claimTicket(value, deviceId, requestId, expiresAt) {
+    if (!this.validTicket(value, deviceId)) return false
+    this.ticketClaim = { deviceId, requestId, expiresAt: Math.min(expiresAt, this.ticketExpiresAt) }
+    return true
+  }
+
+  releaseTicketClaim(deviceId, requestId) {
+    if (this.ticketClaim?.deviceId === deviceId && this.ticketClaim?.requestId === requestId) this.ticketClaim = null
+  }
+
+  isSecureRequest(req) {
+    if (req.socket?.encrypted) return true
+    try {
+      const publicUrl = this.options.getPublicUrl?.()
+      if (typeof publicUrl === 'string' && new URL(publicUrl).protocol === 'https:') return true
+    } catch {
+      return false
+    }
+    return false
+  }
+
+  publicEndpointAllowed() {
+    try {
+      const publicUrl = this.options.getPublicUrl?.()
+      if (typeof publicUrl !== 'string') return true
+      const parsed = new URL(publicUrl)
+      if (parsed.protocol === 'https:') return true
+      return parsed.protocol === 'http:' && ['localhost', '127.0.0.1', '::1', '[::1]'].includes(parsed.hostname.toLowerCase())
+    } catch {
+      return false
+    }
+  }
+
+  cookieSuffix(req, maxAge) {
+    return `; Max-Age=${maxAge}; Path=/; HttpOnly; SameSite=Lax${this.isSecureRequest(req) ? '; Secure' : ''}`
+  }
+
+  newDeviceId() {
+    return randomBytes(18).toString('base64url')
+  }
+
+  signedDeviceId(raw) {
+    if (typeof raw !== 'string') return null
+    const parts = raw.split('.')
+    if (parts.length !== 3) return null
+    const [id, issuedRaw, signature] = parts
+    if (!/^[A-Za-z0-9_-]{20,40}$/.test(id) || !/^\d{10,16}$/.test(issuedRaw)) return null
+    const issuedAt = Number(issuedRaw)
+    const now = Date.now()
+    if (!Number.isSafeInteger(issuedAt) || issuedAt > now + 60_000 || now - issuedAt >= DEVICE_MAX_AGE_SECONDS * 1000) return null
+    const expected = sign(this.deriveSecret('dsh-mobile-harness/device-cookie/v1'), `${id}.${issuedRaw}`)
+    return safeEqualText(signature, expected) ? id : null
+  }
+
+  readDeviceId(req) {
+    return this.signedDeviceId(readCookie(req, DEVICE_COOKIE))
+  }
+
+  deviceCookieValue(req, id) {
+    const issuedAt = Date.now()
+    const payload = `${id}.${issuedAt}`
+    const signature = sign(this.deriveSecret('dsh-mobile-harness/device-cookie/v1'), payload)
+    return `${DEVICE_COOKIE}=${payload}.${signature}${this.cookieSuffix(req, DEVICE_MAX_AGE_SECONDS)}`
+  }
+
+  clearCookie(req, name) {
+    return `${name}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax${this.isSecureRequest(req) ? '; Secure' : ''}`
+  }
+
+  makePendingProof(req, deviceId, requestId, ticket = null) {
+    const now = Date.now()
+    this.prunePendingProofs(now)
+    if (this.pendingProofs.size >= MAX_PENDING_PROOFS) {
+      const oldest = this.pendingProofs.keys().next().value
+      if (oldest) {
+        const proof = this.pendingProofs.get(oldest)
+        this.discardPendingProof({ token: oldest, ...proof })
+      }
+    }
+    const token = randomBytes(24).toString('base64url')
+    const expiresAt = now + PENDING_MAX_AGE_SECONDS * 1000
+    const source = this.requestBindingSource(req)
+    const userAgent = sign(this.deriveSecret('dsh-mobile-harness/pending-agent/v1'), String(req.headers['user-agent'] || ''))
+    const payload = `${token}.${deviceId}.${requestId}.${expiresAt}.${source}.${userAgent}.${ticket || ''}`
+    const signature = sign(this.deriveSecret('dsh-mobile-harness/pending-auth/v1'), payload)
+    this.pendingProofs.set(token, { deviceId, requestId, expiresAt, source, userAgent, ticket })
+    return `${PENDING_COOKIE}=${token}.${signature}${this.cookieSuffix(req, PENDING_MAX_AGE_SECONDS)}`
+  }
+
+  requestBindingSource(req) {
+    return this.trustedRateSource(req) || parseIp(req.socket?.remoteAddress) || 'unknown'
+  }
+
+  prunePendingProofs(now = Date.now()) {
+    for (const [token, proof] of this.pendingProofs) {
+      if (!proof || proof.expiresAt <= now) this.pendingProofs.delete(token)
+    }
+    if (this.ticketClaim && this.ticketClaim.expiresAt <= now) this.ticketClaim = null
+  }
+
+  pendingProof(req, deviceId, requestId) {
+    const raw = readCookie(req, PENDING_COOKIE)
+    if (typeof raw !== 'string') return null
+    const parts = raw.split('.')
+    if (parts.length !== 2 || !/^[A-Za-z0-9_-]{32}$/.test(parts[0])) return null
+    const [token, signature] = parts
+    const proof = this.pendingProofs.get(token)
+    if (!proof || proof.expiresAt <= Date.now() || proof.deviceId !== deviceId) return null
+    if (requestId && proof.requestId !== requestId) return null
+    const source = this.requestBindingSource(req)
+    const userAgent = sign(this.deriveSecret('dsh-mobile-harness/pending-agent/v1'), String(req.headers['user-agent'] || ''))
+    if (proof.source !== source || !safeEqualText(proof.userAgent, userAgent)) return null
+    const payload = `${token}.${proof.deviceId}.${proof.requestId}.${proof.expiresAt}.${proof.source}.${proof.userAgent}.${proof.ticket || ''}`
+    const expected = sign(this.deriveSecret('dsh-mobile-harness/pending-auth/v1'), payload)
+    if (!safeEqualText(signature, expected)) return null
+    return { token, ...proof }
+  }
+
+  discardPendingProof(proof) {
+    if (proof?.token) this.pendingProofs.delete(proof.token)
+    if (proof?.ticket) this.releaseTicketClaim(proof.deviceId, proof.requestId)
   }
 
   /**
@@ -246,8 +474,10 @@ export class GatewayProxy {
    */
   cachePolicy(path, status) {
     if (status !== 200) return null
-    if (/^\/(assets|plugins)\//.test(path)) return 'public, max-age=31536000, immutable'
-    if (path === '/manifest.webmanifest' || path === '/favicon.svg') return 'public, max-age=86400'
+    const normalized = canonicalPath(path)
+    if (!normalized) return null
+    if (/^\/(assets|plugins)\//.test(normalized)) return 'public, max-age=31536000, immutable'
+    if (normalized === '/manifest.webmanifest' || normalized === '/favicon.svg') return 'public, max-age=86400'
     return null
   }
 
@@ -272,6 +502,34 @@ export class GatewayProxy {
     return active
   }
 
+  runtimeDevice(id) {
+    const current = this.devices.get(id)
+    if (current) {
+      this.devices.delete(id)
+      this.devices.set(id, current)
+      current.lastSeen = Date.now()
+      return current
+    }
+    const now = Date.now()
+    for (const [candidate, entry] of this.devices) {
+      if (entry.pages === 0 && now - entry.lastSeen > DEVICE_IDLE_TTL_MS) this.devices.delete(candidate)
+    }
+    while (this.devices.size >= MAX_RUNTIME_DEVICES) {
+      let removable = null
+      for (const [candidate, entry] of this.devices) {
+        if (entry.pages === 0) {
+          removable = candidate
+          break
+        }
+      }
+      if (!removable) return null
+      this.devices.delete(removable)
+    }
+    const created = { firstSeen: now, lastSeen: now, pages: 0, hadPage: false }
+    this.devices.set(id, created)
+    return created
+  }
+
   /** Clear the device registry (manual reset from the panel). */
   resetDevices() {
     this.devices.clear()
@@ -280,10 +538,6 @@ export class GatewayProxy {
   /** Open DSH pages, one WebSocket each. */
   pageCount() {
     return this.pages
-  }
-
-  deviceCookieValue(id) {
-    return `${DEVICE_COOKIE}=${id}; Max-Age=${DEVICE_MAX_AGE_SECONDS}; Path=/; HttpOnly; SameSite=Lax`
   }
 
   /** Append one Set-Cookie to a header value that may be absent/string/array. */
@@ -303,15 +557,11 @@ export class GatewayProxy {
    */
   touchDevice(req) {
     const now = Date.now()
-    let id = readCookie(req, DEVICE_COOKIE)
-    let isNew = false
-    if (typeof id !== 'string' || id.length < 6) {
-      id = randomBytes(9).toString('base64url')
-      isNew = true
-    }
-    const entry = this.devices.get(id)
+    const signedId = this.readDeviceId(req)
+    const id = signedId || this.newDeviceId()
+    const isNew = !signedId
+    const entry = this.runtimeDevice(id)
     if (entry) entry.lastSeen = now
-    else this.devices.set(id, { firstSeen: now, lastSeen: now, pages: 0, hadPage: false })
     return { id, isNew }
   }
 
@@ -333,7 +583,7 @@ export class GatewayProxy {
       revoked: false
     }
     this.options.addSession?.(record)
-    return `${id}.${issuedAt}.${sign(this.options.sessionSecret, `${id}.${issuedAt}`)}`
+    return `${id}.${issuedAt}.${sign(this.getSessionSecret(), `${id}.${issuedAt}`)}`
   }
 
   /** Validate a session cookie against the signed token AND the persisted registry. */
@@ -342,23 +592,27 @@ export class GatewayProxy {
     const parts = raw.split('.')
     if (parts.length !== 3) return null
     const [id, issuedRaw, signature] = parts
-    const expected = sign(this.options.sessionSecret, `${id}.${issuedRaw}`)
-    const a = Buffer.from(signature)
-    const b = Buffer.from(expected)
-    if (a.length !== b.length || !timingSafeEqual(a, b)) return null
+    if (!/^[A-Za-z0-9_-]{12,40}$/.test(id) || !/^\d{10,16}$/.test(issuedRaw)) return null
+    const expected = sign(this.getSessionSecret(), `${id}.${issuedRaw}`)
+    if (!safeEqualText(signature, expected)) return null
     const issuedAt = Number(issuedRaw)
-    if (!Number.isFinite(issuedAt) || Date.now() - issuedAt >= SESSION_MAX_AGE_SECONDS * 1000) return null
+    const now = Date.now()
+    if (!Number.isSafeInteger(issuedAt) || issuedAt > now + 60_000 || now - issuedAt >= SESSION_MAX_AGE_SECONDS * 1000) return null
     const record = this.options.findSession?.(id)
-    if (!record || record.revoked) return null
-    record.lastSeen = Date.now()
-    this.options.touchSession?.(record)
+    if (!record || record.revoked || Number(record.issuedAt) !== issuedAt) return null
     return record
   }
 
-  /** Stable device id for an app installation: HMAC of the app-generated installation id. */
+  touchSessionRecord(record) {
+    if (!record) return
+    record.lastSeen = Date.now()
+    this.options.touchSession?.(record)
+  }
+
+  /** Rate-limit hint only; the app-provided installation id never becomes a trusted identity. */
   installationDeviceId(installationId) {
     if (typeof installationId !== 'string' || !/^[A-Za-z0-9_-]{12,128}$/.test(installationId)) return null
-    return sign(this.options.sessionSecret, `install:${installationId}`).slice(0, 22)
+    return sign(this.deriveSecret('dsh-mobile-harness/install-rate/v1'), installationId).slice(0, 22)
   }
 
   // ── admission: who is this device, and may it come in? ────────────────────
@@ -368,71 +622,105 @@ export class GatewayProxy {
     return this.options.registry ?? null
   }
 
-  /** Approval policy; without a registry the gateway keeps its 0.3.x open behaviour. */
+  /** Approval policy; missing registry data fails closed in `admitDevice`. */
   get admissionPolicy() {
     const registry = this.registry
-    return registry ? registry.settings : { requireApproval: false, maxOnlineDevices: 0 }
+    return registry ? registry.settings : { requireApproval: true, maxOnlineDevices: 0 }
   }
 
   /** Everything the registry needs to know about the caller. */
   identifyDevice(req) {
     const installationRaw = req.headers['x-dsh-client-id']
-    const installationDevice = this.installationDeviceId(installationRaw)
+    const rateInstallation = this.installationDeviceId(installationRaw)
     const userAgent = String(req.headers['user-agent'] ?? '')
     const client = String(req.headers['x-dsh-client'] ?? '').toLowerCase() === 'app' ? 'app' : 'web'
-    let id = installationDevice
-    let isNew = false
-    if (!id) {
-      const cookie = readCookie(req, DEVICE_COOKIE)
-      if (typeof cookie === 'string' && cookie.length >= 6) id = cookie
-      else {
-        id = randomBytes(9).toString('base64url')
-        isNew = true
-      }
-    }
-    let runtime = this.devices.get(id)
-    if (!runtime) {
-      runtime = { firstSeen: Date.now(), lastSeen: Date.now(), pages: 0, hadPage: false }
-      this.devices.set(id, runtime)
-    }
-    runtime.lastSeen = Date.now()
+    const signedId = this.readDeviceId(req)
+    const id = signedId || this.newDeviceId()
+    const runtime = this.runtimeDevice(id)
+    if (runtime) runtime.lastSeen = Date.now()
     return {
       id,
-      isNew,
+      isNew: !signedId,
+      rateId: signedId || rateInstallation || id,
       client,
       clientVersion: String(req.headers['x-dsh-client-version'] ?? '').slice(0, 32),
       label: describeUserAgent(userAgent),
       userAgent: userAgent.slice(0, 240),
-      installation: Boolean(installationDevice)
+      installation: Boolean(rateInstallation)
     }
   }
 
-  noteFailure(deviceId) {
-    const now = Date.now()
-    for (const key of [deviceId, 'global']) {
-      const entry = this.failures.get(key)
-      if (!entry || now - entry.firstAt > FAILURE_WINDOW_MS) this.failures.set(key, { count: 1, firstAt: now })
-      else entry.count += 1
+  bumpFailure(key, now = Date.now()) {
+    const previous = this.failures.get(key)
+    this.failures.delete(key)
+    const entry = !previous || now - previous.firstAt > FAILURE_WINDOW_MS
+      ? { count: 1, firstAt: now }
+      : { count: previous.count + 1, firstAt: previous.firstAt }
+    this.failures.set(key, entry)
+    while (this.failures.size > MAX_RATE_ENTRIES) this.failures.delete(this.failures.keys().next().value)
+    return entry
+  }
+
+  failureEntry(key, now = Date.now()) {
+    const entry = this.failures.get(key)
+    if (!entry) return null
+    if (now - entry.firstAt > FAILURE_WINDOW_MS) {
+      this.failures.delete(key)
+      return null
     }
+    this.failures.delete(key)
+    this.failures.set(key, entry)
+    return entry
+  }
+
+  trustedRateSource(req) {
+    const mode = this.options.getTunnelMode?.()
+    if (mode === 'quick') {
+      const source = parseIp(req.headers['cf-connecting-ip'])
+      return source ? `cloudflare:${source}` : null
+    }
+    if (mode === 'tailscale') {
+      const login = req.headers['tailscale-user-login']
+      const name = req.headers['tailscale-user-name']
+      const identity = typeof login === 'string' && login.length <= 256 ? login : name
+      if (typeof identity === 'string' && identity.length > 0 && identity.length <= 256) {
+        return `tailscale:${identity.toLowerCase()}`
+      }
+    }
+    const remote = parseIp(req.socket?.remoteAddress)
+    if (remote && !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remote)) return `socket:${remote}`
+    return null
+  }
+
+  noteFailure(deviceId, req) {
+    const now = Date.now()
+    this.bumpFailure(`device:${deviceId}`, now)
+    const source = this.trustedRateSource(req)
+    let delay = AUTH_FAILURE_DELAY_MS
+    if (source) {
+      this.bumpFailure(`source:${source}`, now)
+    } else {
+      if (!this.unknownFailureWindowAt || now - this.unknownFailureWindowAt > FAILURE_WINDOW_MS) {
+        this.unknownFailureWindowAt = now
+        this.unknownFailureCount = 0
+      }
+      this.unknownFailureCount = Math.min(this.unknownFailureCount + 1, 100)
+      delay = Math.min(MAX_UNKNOWN_BACKOFF_MS, AUTH_FAILURE_DELAY_MS * (2 ** Math.min(this.unknownFailureCount - 1, 2)))
+    }
+    return delay
   }
 
   clearFailures(deviceId) {
-    this.failures.delete(deviceId)
+    this.failures.delete(`device:${deviceId}`)
   }
 
-  rateLimited(deviceId) {
+  rateLimited(deviceId, req) {
     const now = Date.now()
-    for (const key of [deviceId, 'global']) {
-      const entry = this.failures.get(key)
-      if (!entry) continue
-      if (now - entry.firstAt > FAILURE_WINDOW_MS) {
-        this.failures.delete(key)
-        continue
-      }
-      const limit = key === 'global' ? FAILURE_LIMIT_GLOBAL : FAILURE_LIMIT_PER_DEVICE
-      if (entry.count >= limit) return true
-    }
-    return false
+    const device = this.failureEntry(`device:${deviceId}`, now)
+    if (device && device.count >= FAILURE_LIMIT_PER_DEVICE) return true
+    const source = this.trustedRateSource(req)
+    const sourceEntry = source ? this.failureEntry(`source:${source}`, now) : null
+    return Boolean(sourceEntry && sourceEntry.count >= FAILURE_LIMIT_PER_SOURCE)
   }
 
   /** Devices that currently hold an open page (one WebSocket per page). */
@@ -466,22 +754,43 @@ export class GatewayProxy {
    * against itself, so several tabs of one phone still use a single slot.
    * @returns {{online: number, max: number}|null} non-null when the limit is already reached
    */
-  onlineLimit(deviceId) {
+  onlineLimit(deviceId, excludeSessionId = null) {
     const max = this.admissionPolicy.maxOnlineDevices
     if (!max || max <= 0) return null
-    const others = this.onlineDeviceIds()
-    others.delete(deviceId)
-    if (others.size < max) return null
-    return { online: others.size, max }
+    const now = Date.now()
+    const active = []
+    for (const session of this.options.getSessions?.() ?? []) {
+      if (!session || session.revoked || !session.id || !session.deviceId) continue
+      const issuedAt = Number(session.issuedAt)
+      if (!Number.isSafeInteger(issuedAt) || issuedAt > now || now - issuedAt >= SESSION_MAX_AGE_SECONDS * 1000) continue
+      if (session.id !== excludeSessionId && now - (Number(session.lastSeen) || issuedAt) >= SESSION_IDLE_TTL_MS) {
+        const sockets = this.sessionSockets.get(session.id)
+        if (!sockets || sockets.size === 0) continue
+      }
+      if (this.revokedByPolicy(session.deviceId)) continue
+      active.push(session)
+    }
+    const others = active.filter((session) => session.id !== excludeSessionId).length
+    if (others < max) return null
+    return { online: others, max }
+  }
+
+  touchActiveSessions(deviceId) {
+    const now = Date.now()
+    for (const session of this.options.getSessions?.() ?? []) {
+      if (session && !session.revoked && session.deviceId === deviceId) {
+        session.lastSeen = now
+        this.options.touchSession?.(session)
+      }
+    }
   }
 
   /** A removed/blocked device must lose even a still-valid session cookie. */
   revokedByPolicy(deviceId) {
     const registry = this.registry
-    if (!registry || !deviceId) return false
-    if (registry.settings.requireApproval === false) return false
+    if (!registry || !deviceId) return true
     const record = registry.get(deviceId)
-    return Boolean(record && (record.state === 'revoked' || record.state === 'blocked'))
+    return !record || record.state !== 'trusted'
   }
 
   sendJson(res, status, payload, cookies) {
@@ -491,11 +800,147 @@ export class GatewayProxy {
     res.end(JSON.stringify(payload))
   }
 
+  rejectBody(req, res) {
+    req.pause()
+    const socket = req.socket
+    if (res.writableFinished) {
+      socket.destroy()
+      return
+    }
+    res.once('finish', () => socket.destroy())
+    if (!res.headersSent) {
+      res.writeHead(413, { 'content-type': 'text/plain; charset=utf-8', 'connection': 'close', 'cache-control': 'no-store' })
+      res.end('payload too large\n')
+    }
+  }
+
+  readBody(req, res) {
+    const declared = Number(req.headers['content-length'])
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+      this.rejectBody(req, res)
+      return Promise.resolve(null)
+    }
+    return new Promise((resolve, reject) => {
+      const chunks = []
+      let size = 0
+      let done = false
+      const fail = (error) => {
+        if (done) return
+        done = true
+        reject(error)
+      }
+      req.on('data', (chunk) => {
+        if (done) return
+        size += chunk.length
+        if (size > MAX_BODY_BYTES) {
+          done = true
+          chunks.length = 0
+          req.pause()
+          this.rejectBody(req, res)
+          resolve(null)
+          return
+        }
+        chunks.push(chunk)
+      })
+      req.on('end', () => {
+        if (done) return
+        done = true
+        resolve(Buffer.concat(chunks).toString('utf8'))
+      })
+      req.on('error', fail)
+      req.on('aborted', () => fail(new Error('request aborted')))
+    })
+  }
+
+  allowedOrigin(origin) {
+    let parsed
+    try {
+      parsed = new URL(origin)
+    } catch {
+      return false
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
+      return false
+    }
+    try {
+      const publicUrl = this.options.getPublicUrl?.()
+      if (typeof publicUrl === 'string') {
+        const expected = new URL(publicUrl)
+        const expectedLoopback = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(expected.hostname.toLowerCase())
+        if (expected.protocol === 'https:' && expected.origin === parsed.origin) return true
+        if (expected.protocol === 'http:' && expectedLoopback && expected.origin === parsed.origin) return true
+      }
+    } catch {
+      return false
+    }
+    const hostname = parsed.hostname.toLowerCase()
+    const loopback = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]'
+    const port = Number(parsed.port) || (parsed.protocol === 'https:' ? 443 : 80)
+    return loopback && [this.port, this.tlsPort].includes(port)
+  }
+
+  requestOriginAllowed(req, upgrade = false) {
+    const origin = req.headers.origin
+    const referer = req.headers.referer
+    const sessionCookie = readCookie(req, SESSION_COOKIE)
+    const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(String(req.method || '').toUpperCase())
+    const fetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase()
+    if (fetchSite === 'cross-site' && (upgrade || sessionCookie || unsafe)) return false
+    if (upgrade && typeof origin !== 'string') return false
+    if (typeof this.options.getPublicUrl?.() !== 'string' && this.options.getTunnelMode?.() && this.options.getTunnelMode() !== 'none' && origin === undefined && referer === undefined) {
+      return false
+    }
+    if (origin !== undefined) return typeof origin === 'string' && this.allowedOrigin(origin)
+    if (typeof referer === 'string' && referer.length > 0) {
+      try {
+        return this.allowedOrigin(new URL(referer).origin)
+      } catch {
+        return false
+      }
+    }
+    if (upgrade) return false
+    if (sessionCookie && unsafe && String(req.headers['x-dsh-client'] || '').toLowerCase() !== 'app') return false
+    return true
+  }
+
+  upstreamOrigin() {
+    return `http://${this.options.upstreamHost}:${this.options.upstreamPort}`
+  }
+
+  beginDeviceRequest(token, isPoll) {
+    if (typeof token !== 'string' || token.length < 12) return { ok: false, code: 'token' }
+    const key = sign(this.deriveSecret('dsh-mobile-harness/device-rate/v1'), token)
+    const now = Date.now()
+    let entry = this.deviceTraffic.get(key)
+    if (!entry || now - entry.firstAt > 60_000) entry = { count: 0, firstAt: now, polls: entry?.polls ?? 0 }
+    if (entry.count >= MAX_DEVICE_REQUESTS_PER_MINUTE) return { ok: false, code: 'rate' }
+    if (isPoll && entry.polls >= MAX_DEVICE_POLLS) return { ok: false, code: 'poll-limit' }
+    entry.count += 1
+    if (isPoll) entry.polls += 1
+    this.deviceTraffic.delete(key)
+    this.deviceTraffic.set(key, entry)
+    while (this.deviceTraffic.size > MAX_RATE_ENTRIES) this.deviceTraffic.delete(this.deviceTraffic.keys().next().value)
+    return { ok: true, key }
+  }
+
+  endDevicePoll(key) {
+    const entry = this.deviceTraffic.get(key)
+    if (!entry) return
+    entry.polls = Math.max(0, entry.polls - 1)
+  }
+
+  async waitAuthDelay(startedAt, minimum = AUTH_FAILURE_DELAY_MS) {
+    const remaining = minimum - (Date.now() - startedAt)
+    if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining))
+  }
+
   /**
    * POST /__verify (password + device identity) and POST /__verify/status (poll a pending
    * request). Both answer JSON; the app decides between "entered", "waiting" and the errors.
    */
-  handleVerify(req, res, url, bodyText) {
+  async handleVerify(req, res, url, bodyText) {
+    const startedAt = Date.now()
+    if (url.pathname !== '/__verify/status') await this.waitAuthDelay(startedAt)
     let body = {}
     try {
       body = JSON.parse(bodyText)
@@ -505,52 +950,57 @@ export class GatewayProxy {
     const device = this.identifyDevice(req)
     const registry = this.registry
     const existing = registry ? registry.get(device.id) : null
+    if (url.pathname === '/__verify/status') {
+      this.handleVerifyStatus(req, res, body, device)
+      return
+    }
+    if (!registry) {
+      this.sendJson(res, 503, { ok: false, code: 'unavailable' })
+      return
+    }
     if (existing && existing.state === 'blocked') {
       this.sendJson(res, 403, { ok: false, code: 'blocked', blacklisted: true, label: existing.label })
       return
     }
-    if (this.rateLimited(device.id)) {
+    const rateId = device.rateId || device.id
+    if (this.rateLimited(rateId, req)) {
       this.sendJson(res, 429, { ok: false, code: 'too-many', message: '尝试过于频繁，请 5 分钟后再试' })
-      return
-    }
-    if (url.pathname === '/__verify/status') {
-      this.handleVerifyStatus(req, res, body, device)
       return
     }
 
     const submitted = typeof body?.password === 'string' ? body.password : ''
     const ticket = typeof body?.ticket === 'string' ? body.ticket : ''
     const passwordOk = this.options.verifyPassword(submitted)
-    // A scan code carries a one-time ticket instead of the password (0.5.6): trading it in here
-    // means a phone that never stored a password can still sign in. The ticket is burnt on use and
-    // admission below still applies, so a screenshot of the panel is worthless.
-    const ticketOk = passwordOk ? false : this.consumeTicket(ticket)
+    const ticketOk = passwordOk ? false : this.validTicket(ticket, device.id)
     if (!passwordOk && !ticketOk) {
-      // A stale ticket is not a wrong password: do not count it towards the lockout, and say so.
-      if (ticket) {
-        this.sendJson(res, 401, { ok: false, code: 'ticket' })
-        return
-      }
-      this.noteFailure(device.id)
-      this.sendJson(res, 401, { ok: false, code: 'password' })
+      const delay = this.noteFailure(rateId, req)
+      await this.waitAuthDelay(startedAt, delay)
+      this.sendJson(res, 401, { ok: false, code: ticket ? 'ticket' : 'password' })
       return
     }
-    this.clearFailures(device.id)
+    this.clearFailures(rateId)
 
     const issue = () => {
-      registry?.markLogin(device.id)
-      this.sendJson(res, 200, { ok: true, deviceId: device.id, label: registry?.get(device.id)?.label ?? device.label }, [
+      registry.markLogin(device.id)
+      this.sendJson(res, 200, { ok: true, deviceId: device.id, label: registry.get(device.id)?.label ?? device.label }, [
         this.sessionCookieValue(req, device),
-        this.deviceCookieValue(device.id)
+        this.deviceCookieValue(req, device.id),
+        this.clearCookie(req, PENDING_COOKIE)
       ])
     }
 
-    const admitted = this.admitDevice(device)
+    const admitted = this.admitDevice(device, req)
     if (admitted.ok) {
+      if (ticketOk && !this.consumeTicket(ticket, device.id, this.ticketClaim?.requestId)) {
+        this.sendJson(res, 401, { ok: false, code: 'ticket' })
+        return
+      }
       issue()
       return
     }
     if (admitted.status === 202) {
+      if (ticketOk) this.claimTicket(ticket, device.id, admitted.pending.requestId, admitted.pending.expiresAt)
+      const proofCookie = this.makePendingProof(req, device.id, admitted.pending.requestId, ticketOk ? ticket : null)
       this.options.log?.(
         'admission: waiting for approval from ' + admitted.pending.label + ' (' + admitted.pending.client + ')'
       )
@@ -563,7 +1013,7 @@ export class GatewayProxy {
         label: admitted.pending.label,
         client: admitted.pending.client,
         expiresAt: admitted.pending.expiresAt
-      })
+      }, [this.deviceCookieValue(req, device.id), proofCookie])
       return
     }
     this.sendJson(res, admitted.status, admitted.payload)
@@ -574,9 +1024,9 @@ export class GatewayProxy {
    * login form), so the app and a browser can never drift apart on trust, codes or limits.
    * @returns {{ok: true, record?: object} | {ok: false, status: number, payload?: object, pending?: object}}
    */
-  admitDevice(device) {
+  admitDevice(device, req) {
     const registry = this.registry
-    if (!registry) return { ok: true }
+    if (!registry) return { ok: false, status: 503, payload: { ok: false, code: 'unavailable' } }
     const policy = this.admissionPolicy
     const { record } = registry.touch(device.id, device)
     let trusted = record.state === 'trusted'
@@ -592,7 +1042,8 @@ export class GatewayProxy {
         trusted = true
       }
     }
-    const limit = this.onlineLimit(device.id)
+    const currentSession = req ? this.authorizedSession(req) : null
+    const limit = this.onlineLimit(device.id, currentSession?.id ?? null)
     if (limit) {
       return {
         ok: false,
@@ -622,36 +1073,58 @@ export class GatewayProxy {
       this.sendJson(res, 503, { ok: false, code: 'unavailable' })
       return
     }
+    const requestId = typeof body?.requestId === 'string' ? body.requestId : ''
+    const currentSession = this.authorizedSession(req)
+    if (currentSession && currentSession.deviceId === device.id) {
+      this.sendJson(res, 200, { ok: true, approved: true, label: registry.get(device.id)?.label ?? device.label })
+      return
+    }
+    const proof = this.pendingProof(req, device.id, requestId)
+    if (!proof) {
+      this.sendJson(res, 403, { ok: false, code: 'expired' })
+      return
+    }
     const record = registry.get(device.id)
     if (record && record.state === 'blocked') {
+      this.discardPendingProof(proof)
       this.sendJson(res, 403, { ok: false, code: 'blocked', blacklisted: true, label: record.label })
       return
     }
     if (record && record.state === 'trusted') {
       const limit = this.onlineLimit(device.id)
       if (limit) {
+        this.discardPendingProof(proof)
         this.sendJson(res, 403, { ok: false, code: 'max-online', online: limit.online, max: limit.max, label: record.label })
         return
       }
+      if (proof.ticket && !this.consumeTicket(proof.ticket, device.id, proof.requestId)) {
+        this.discardPendingProof(proof)
+        this.sendJson(res, 403, { ok: false, code: 'ticket' })
+        return
+      }
+      this.discardPendingProof(proof)
       registry.markLogin(device.id)
       this.sendJson(res, 200, { ok: true, approved: true, deviceId: device.id, label: record.label }, [
         this.sessionCookieValue(req, device),
-        this.deviceCookieValue(device.id)
+        this.deviceCookieValue(req, device.id),
+        this.clearCookie(req, PENDING_COOKIE)
       ])
       return
     }
-    const requestId = typeof body?.requestId === 'string' ? body.requestId : ''
-    const request = requestId ? registry.getRequest(requestId) : registry.pendingForDevice(device.id)
+    const request = requestId ? registry.getRequest(requestId) : null
     if (!request || request.deviceId !== device.id) {
+      this.discardPendingProof(proof)
       this.sendJson(res, 403, { ok: false, code: 'expired' })
       return
     }
     if (request.status === 'denied') {
+      this.discardPendingProof(proof)
       this.sendJson(res, 403, { ok: false, code: 'denied', label: request.label })
       return
     }
     const limit = this.onlineLimit(device.id)
     if (limit) {
+      this.discardPendingProof(proof)
       this.sendJson(res, 403, { ok: false, code: 'max-online', online: limit.online, max: limit.max, label: request.label })
       return
     }
@@ -667,76 +1140,27 @@ export class GatewayProxy {
     })
   }
 
-  // ── browser entry: one-time scan ticket, then a real login form ──────────
-
-  /**
-   * A scan of the panel's own screen. The ticket proves the caller is standing in front of the
-   * owner's computer, so the password is skipped — but it is NOT the approval: the device goes
-   * through the same admission as the app, so a first-time browser still has to be allowed on the
-   * computer with the matching pairing code. The ticket is burnt here (single use, 10 minutes).
-   */
-  handleTicket(req, res, url) {
-    if (!this.consumeTicket(url.searchParams.get('t'))) {
-      this.serveLoginPage(res, '这个二维码已经用过或过期了（一次性，10 分钟）。重新扫码，或输入密码进入。', 401)
+  handleWaiting(req, res, url) {
+    const device = this.identifyDevice(req)
+    const requestId = url.searchParams.get('requestId') || ''
+    const proof = this.pendingProof(req, device.id, requestId)
+    const request = this.registry?.getRequest(requestId)
+    if (!proof || !request || request.deviceId !== device.id || request.status === 'denied') {
+      this.discardPendingProof(proof)
+      this.serveLoginPage(res, '这次请求已过期，请重新扫码或输入密码。', 403)
       return
     }
-    const device = this.touchDevice(req)
-    if (this.isBlacklisted(device.id)) {
-      this.serveText(res, 403, 'This device is blocked.')
-      return
-    }
-    const registry = this.registry
-    const userAgent = String(req.headers['user-agent'] ?? '')
-    if (registry) {
-      registry.touch(device.id, {
-        label: describeUserAgent(userAgent),
-        client: 'web',
-        clientVersion: '',
-        userAgent: userAgent.slice(0, 240)
-      })
-      const record = registry.get(device.id)
-      if (record && record.state === 'blocked') {
-        this.serveLoginPage(res, '这台设备已被拉黑，先在电脑上解除。', 403)
-        return
-      }
-    }
-    const admitted = this.admitDevice(device)
-    if (admitted.ok) {
-      registry?.markLogin(device.id)
-      const clean = new URL(url.href)
-      clean.searchParams.delete('t')
-      this.options.log?.('scan ticket accepted for ' + describeUserAgent(userAgent))
-      res.writeHead(302, {
-        location: clean.pathname + (clean.search || ''),
-        'cache-control': 'no-store',
-        'set-cookie': [this.sessionCookieValue(req, device), this.deviceCookieValue(device.id)]
-      })
-      res.end()
-      return
-    }
-    if (admitted.status === 202) {
-      this.options.log?.(
-        'scan ticket queued for approval (' + admitted.pending.label + '), code shown on both sides'
-      )
-      res.writeHead(200, {
-        'content-type': 'text/html; charset=utf-8',
-        'cache-control': 'no-store',
-        'set-cookie': [this.deviceCookieValue(device.id)]
-      })
-      res.end(this.waitingPage(admitted.pending))
-      return
-    }
-    const code = admitted.payload?.code
-    if (code === 'max-online') {
-      this.serveLoginPage(res, '在线设备已达上限（' + admitted.payload.online + '/' + admitted.payload.max + '），先在电脑上移除一台。', 403)
-    } else if (code === 'denied') {
-      this.serveLoginPage(res, '电脑上点过「拒绝」，过一会儿再试。', 403)
-    } else if (code === 'max-pending') {
-      this.serveLoginPage(res, '等待同意的设备太多了，先在电脑上处理一下。', 403)
-    } else {
-      this.serveLoginPage(res, '这台设备现在不能进入。', 403)
-    }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+    res.end(this.waitingPage({
+      requestId: request.requestId,
+      pairCode: request.code,
+      label: request.label,
+      client: request.client,
+      expiresAt: request.expiresAt
+    }))
   }
+
+  // ── browser entry: password form and fragment ticket exchange ────────────
 
   /** GET shows the password form, POST runs it through the same admission as the app. */
   handleLogin(req, res, url) {
@@ -748,58 +1172,68 @@ export class GatewayProxy {
       this.serveLoginPage(res, '这个地址只接受 GET 和 POST。', 405)
       return
     }
-    const chunks = []
-    req.on('data', (chunk) => chunks.push(chunk))
-    req.on('end', () => {
-      try {
-        this.completeLogin(req, res, Buffer.concat(chunks).toString('utf8'))
-      } catch (error) {
-        this.options.log?.('browser login failed: ' + String(error?.message || error))
-        this.serveLoginPage(res, '登录出错了，刷新页面再试一次。', 500)
-      }
+    this.readBody(req, res).then((bodyText) => {
+      if (bodyText === null) return
+      return this.completeLogin(req, res, bodyText)
+    }).catch((error) => {
+      this.options.log?.('browser login failed: ' + String(error?.message || error))
+      if (!jsonResponseEnded(res)) this.serveLoginPage(res, '登录出错了，刷新页面再试一次。', 500)
     })
   }
 
-  completeLogin(req, res, bodyText) {
+  async completeLogin(req, res, bodyText) {
+    const startedAt = Date.now()
+    await this.waitAuthDelay(startedAt)
     const body = parseFormBody(bodyText, req.headers['content-type'])
     const device = this.identifyDevice(req)
     const registry = this.registry
     const existing = registry ? registry.get(device.id) : null
+    if (!registry) {
+      this.serveLoginPage(res, '远程登录服务暂不可用。', 503)
+      return
+    }
     if (existing && existing.state === 'blocked') {
       this.serveLoginPage(res, '这台设备已被拉黑，先在电脑上解除。', 403)
       return
     }
-    if (this.rateLimited(device.id)) {
+    const rateId = device.rateId || device.id
+    if (this.rateLimited(rateId, req)) {
       this.serveLoginPage(res, '尝试过于频繁，请 5 分钟后再试。', 429)
       return
     }
     const submitted = typeof body?.password === 'string' ? body.password : ''
     if (!this.options.verifyPassword(submitted)) {
-      this.noteFailure(device.id)
+      const delay = this.noteFailure(rateId, req)
+      await this.waitAuthDelay(startedAt, delay)
       this.serveLoginPage(res, '密码不对，再试一次。', 401)
       return
     }
-    this.clearFailures(device.id)
-    const admitted = this.admitDevice(device)
+    this.clearFailures(rateId)
+    const admitted = this.admitDevice(device, req)
     if (admitted.ok) {
-      registry?.markLogin(device.id)
+      registry.markLogin(device.id)
       this.options.log?.('browser login: ' + describeUserAgent(req.headers['user-agent']) + ' entered')
       res.writeHead(302, {
         location: '/',
         'cache-control': 'no-store',
-        'set-cookie': [this.sessionCookieValue(req, device), this.deviceCookieValue(device.id)]
+        'set-cookie': [
+          this.sessionCookieValue(req, device),
+          this.deviceCookieValue(req, device.id),
+          this.clearCookie(req, PENDING_COOKIE)
+        ]
       })
       res.end()
       return
     }
     if (admitted.status === 202) {
+      const proofCookie = this.makePendingProof(req, device.id, admitted.pending.requestId)
       this.options.log?.(
         'admission: browser waiting for approval (' + admitted.pending.label + '), code shown on both sides'
       )
       res.writeHead(200, {
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store',
-        'set-cookie': [this.deviceCookieValue(device.id)]
+        'set-cookie': [this.deviceCookieValue(req, device.id), proofCookie]
       })
       res.end(this.waitingPage(admitted.pending))
       return
@@ -910,12 +1344,11 @@ export class GatewayProxy {
       this.sendJson(res, 503, { ok: false, code: 'unavailable' })
       return
     }
-    const chunks = []
-    req.on('data', (chunk) => chunks.push(chunk))
-    req.on('end', () => {
+    this.readBody(req, res).then((bodyText) => {
+      if (bodyText === null) return
       let body = {}
       try {
-        body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
+        body = JSON.parse(bodyText || '{}')
       } catch {
         body = {}
       }
@@ -924,13 +1357,21 @@ export class GatewayProxy {
           this.handleDeviceToken(req, res, bridge)
           return
         }
-        const auth = bridge.authorize(req, req.headers['x-dsh-device-token'])
+        const token = typeof req.headers['x-dsh-device-token'] === 'string' ? req.headers['x-dsh-device-token'] : ''
+        const auth = bridge.authorize(req, token)
         if (!auth.ok) {
           this.sendJson(res, auth.code === 'disabled' ? 403 : 401, { ok: false, code: auth.code })
           return
         }
+        const poll = url.pathname === '/__device/poll'
+        const budget = this.beginDeviceRequest(token, poll)
+        if (!budget.ok) {
+          this.sendJson(res, 429, { ok: false, code: budget.code })
+          return
+        }
+        this.touchActiveSessions(auth.deviceId)
         if (url.pathname === '/__device/poll') {
-          this.handleDevicePoll(res, bridge, auth.deviceId, body)
+          this.handleDevicePoll(res, bridge, auth.deviceId, body, budget.key)
           return
         }
         if (url.pathname === '/__device/result') {
@@ -943,18 +1384,32 @@ export class GatewayProxy {
         this.options.log?.('device channel failed: ' + String(error?.message || error))
         if (!res.writableEnded) this.sendJson(res, 500, { ok: false, code: 'error' })
       }
+    }).catch((error) => {
+      this.options.log?.('device channel failed: ' + String(error?.message || error))
+      if (!jsonResponseEnded(res)) this.sendJson(res, 500, { ok: false, code: 'error' })
     })
   }
 
   /** A page session proves "this really is the approved phone"; the token is what outlives it. */
   handleDeviceToken(req, res, bridge) {
-    const session = this.resolveSession(readCookie(req, SESSION_COOKIE))
+    if (bridge.enabled === false) {
+      this.sendJson(res, 403, { ok: false, code: 'disabled' })
+      return
+    }
+    const session = this.authorizedSession(req)
     if (!session || !session.deviceId) {
       this.sendJson(res, 401, { ok: false, code: 'session' })
       return
     }
+    const budget = this.beginDeviceRequest(session.id, false)
+    if (!budget.ok) {
+      this.sendJson(res, 429, { ok: false, code: budget.code })
+      return
+    }
+    this.touchActiveSessions(session.deviceId)
     try {
-      const token = bridge.issueToken(session.deviceId)
+      const clientId = String(req.headers['x-dsh-client-id'] ?? '')
+      const token = bridge.issueToken(session.deviceId, clientId)
       this.options.log?.('device channel: token issued to ' + String(session.deviceId).slice(0, 6) + '…')
       this.sendJson(res, 200, { ok: true, token, deviceId: session.deviceId })
     } catch (error) {
@@ -962,10 +1417,11 @@ export class GatewayProxy {
     }
   }
 
-  handleDevicePoll(res, bridge, deviceId, body) {
+  handleDevicePoll(res, bridge, deviceId, body, rateKey) {
     const waitMs = Number(body?.waitMs)
     Promise.resolve(bridge.poll(deviceId, Number.isFinite(waitMs) ? waitMs : undefined))
       .then((cmd) => {
+        this.endDevicePoll(rateKey)
         if (res.writableEnded) return
         if (!cmd) {
           res.writeHead(204, { 'cache-control': 'no-store' })
@@ -975,6 +1431,7 @@ export class GatewayProxy {
         this.sendJson(res, 200, { ok: true, cmd })
       })
       .catch((error) => {
+        this.endDevicePoll(rateKey)
         if (res.writableEnded) return
         this.sendJson(res, 500, { ok: false, code: 'error', message: String(error?.message || error) })
       })
@@ -984,18 +1441,26 @@ export class GatewayProxy {
     return Boolean(deviceId && this.options.isBlacklisted?.(deviceId))
   }
 
-  authorizeSession(req) {
-    if (this.options.passwordEnabled && this.options.passwordEnabled() === false) return true
-    if (this.isBlacklisted(readCookie(req, DEVICE_COOKIE))) return false
+  authorizedSession(req) {
+    const deviceId = this.readDeviceId(req)
     const session = this.resolveSession(readCookie(req, SESSION_COOKIE))
-    if (!session) return false
-    // A device removed or blocked after it logged in loses the session immediately.
-    if (this.revokedByPolicy(session.deviceId)) return false
-    return true
+    if (!deviceId || !session || session.deviceId !== deviceId) return null
+    if (this.isBlacklisted(deviceId) || this.revokedByPolicy(session.deviceId)) return null
+    if (this.onlineLimit(session.deviceId, session.id)) return null
+    this.touchSessionRecord(session)
+    return session
+  }
+
+  authorizeSession(req) {
+    return Boolean(this.authorizedSession(req))
   }
 
   sessionCookieValue(req, device) {
-    return `${SESSION_COOKIE}=${this.issueSession(req, device)}; Max-Age=${SESSION_MAX_AGE_SECONDS}; Path=/; HttpOnly; SameSite=Lax`
+    const current = this.authorizedSession(req)
+    const value = current && current.deviceId === device?.id
+      ? `${current.id}.${current.issuedAt}.${sign(this.getSessionSecret(), `${current.id}.${current.issuedAt}`)}`
+      : this.issueSession(req, device)
+    return `${SESSION_COOKIE}=${value}${this.cookieSuffix(req, SESSION_MAX_AGE_SECONDS)}`
   }
 
   cookieAttributes(req, device) {
@@ -1082,6 +1547,38 @@ export class GatewayProxy {
   <button type="submit">进入</button>
   <div class="hint">仅限本人设备使用。第一次登录的浏览器和 App 一样：密码正确后，要在电脑「远程 → 设备准入」里核对 6 位配对码再点「允许」。扫码进入时会自动登录。</div>
 </form>
+<script>
+(function () {
+  var ticket = new URLSearchParams(location.hash.slice(1)).get('t');
+  if (!ticket) return;
+  history.replaceState(null, '', location.pathname + location.search);
+  var message = document.querySelector('.err');
+  message.textContent = '正在验证扫码票据…';
+  fetch('/__verify', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ticket: ticket })
+  }).then(function (response) {
+    return response.json().catch(function () { return {}; }).then(function (result) {
+      if (response.status === 200) {
+        location.replace('/');
+        return;
+      }
+      if (response.status === 202 && result.requestId) {
+        location.replace('/__waiting?requestId=' + encodeURIComponent(result.requestId));
+        return;
+      }
+      message.textContent = result.code === 'ticket'
+        ? '这张二维码已过期或已使用，请回电脑重新扫码。'
+        : result.code === 'too-many'
+          ? '尝试过于频繁，请稍后再试。'
+          : '扫码登录失败，请输入密码或重新扫码。';
+    });
+  }).catch(function () {
+    message.textContent = '无法连接远程服务，请检查网络后重试。';
+  });
+})();
+</script>
 </body></html>`
   }
 
@@ -1094,7 +1591,9 @@ export class GatewayProxy {
     }
     let lastError = null
     for (const port of candidates) {
-      const server = http.createServer((req, res) => this.handle(req, res))
+      const server = http.createServer({ headersTimeout: 10_000, requestTimeout: 30_000, keepAliveTimeout: 5_000 }, (req, res) => this.handle(req, res))
+      server.maxConnections = MAX_CONNECTIONS
+      server.maxRequestsPerSocket = 256
       server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head))
       server.on('connection', (socket) => {
         try { socket.setNoDelay(true) } catch { /* ignore */ }
@@ -1147,7 +1646,9 @@ export class GatewayProxy {
     for (const port of candidates) {
       let server
       try {
-        server = https.createServer(tlsOptions, (req, res) => this.handle(req, res))
+        server = https.createServer({ ...tlsOptions, headersTimeout: 10_000, requestTimeout: 30_000, keepAliveTimeout: 5_000 }, (req, res) => this.handle(req, res))
+        server.maxConnections = MAX_CONNECTIONS
+        server.maxRequestsPerSocket = 256
       } catch (error) {
         this.options.log?.(`gateway tls setup failed: ${String(error)}`)
         return null
@@ -1191,9 +1692,14 @@ export class GatewayProxy {
 
   upstreamHeaders(req) {
     const authority = `${this.options.upstreamHost}:${this.options.upstreamPort}`
-    const headers = { ...req.headers, host: authority, cookie: this.dshCookie }
-    delete headers.origin
-    delete headers.referer
+    const headers = { ...req.headers, host: authority, cookie: this.dshCookie, 'x-dsh-mobile-remote': '1' }
+    delete headers['x-forwarded-host']
+    delete headers['x-forwarded-proto']
+    delete headers['x-forwarded-port']
+    delete headers.forwarded
+    const path = canonicalPath(new URL(req.url ?? '/', 'http://dsh.invalid').pathname)
+    if (typeof headers.origin === 'string') headers.origin = this.upstreamOrigin()
+    if (typeof headers.referer === 'string' && path) headers.referer = `${this.upstreamOrigin()}${path}`
     delete headers.authorization
     // A navigation may be rewritten on the way back (injectViewport), and a compressed body
     // cannot be rewritten without inflating it first, so ask for identity on navigations only.
@@ -1218,60 +1724,78 @@ export class GatewayProxy {
 
   handle(req, res) {
     try {
+      if (!this.publicEndpointAllowed()) {
+        this.serveText(res, 403, 'HTTPS required.\n')
+        return
+      }
       const url = new URL(req.url ?? '/', 'http://dsh.invalid')
+      const path = canonicalPath(url.pathname)
+      if (!path) {
+        this.serveText(res, 400, 'Bad request path.\n')
+        return
+      }
+      url.pathname = path
+      if (isPluginManagementPath(path)) {
+        this.sendJson(res, 403, { ok: false, code: 'local-only' })
+        return
+      }
+      if (!this.requestOriginAllowed(req)) {
+        this.serveText(res, 403, 'Origin rejected.\n')
+        return
+      }
+      if (url.searchParams.has('p') || url.searchParams.has('t')) {
+        const clean = new URL(url.href)
+        clean.searchParams.delete('p')
+        clean.searchParams.delete('t')
+        if (req.method === 'GET' || req.method === 'HEAD') {
+          res.writeHead(302, { location: clean.pathname + (clean.search || ''), 'cache-control': 'no-store' })
+          res.end()
+          return
+        }
+        url.searchParams.delete('p')
+        url.searchParams.delete('t')
+        req.url = url.pathname + url.search
+      }
 
-      // Admission endpoints used by the native app. They answer JSON only, so nothing here can
-      // turn into a rendered second login page: 200 = entered, 202 = waiting for the owner,
-      // 403 = blocked / denied / device limit, 401 = wrong password, 429 = too many attempts.
-      if (url.pathname === '/__verify' || url.pathname === '/__verify/status') {
+      if (path === '/__verify' || path === '/__verify/status') {
         if (req.method !== 'POST') {
           res.writeHead(405, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
           res.end('{"ok":false,"code":"method"}')
           return
         }
-        const chunks = []
-        req.on('data', (chunk) => chunks.push(chunk))
-        req.on('end', () => {
-          try {
-            this.handleVerify(req, res, url, Buffer.concat(chunks).toString('utf8'))
-          } catch (error) {
-            this.options.log?.('gateway verify failed: ' + String(error))
-            if (res.headersSent) {
-              try { res.end() } catch { /* ignore */ }
-            } else {
-              this.sendJson(res, 500, { ok: false, code: 'error' })
-            }
-          }
+        this.readBody(req, res).then((bodyText) => {
+          if (bodyText === null) return
+          return this.handleVerify(req, res, url, bodyText)
+        }).catch((error) => {
+          this.options.log?.('gateway verify failed: ' + String(error?.message || error))
+          if (!jsonResponseEnded(res)) this.sendJson(res, 500, { ok: false, code: 'error' })
         })
         return
       }
 
-      // Device channel ("phone as hands"): the app polls for one command at a time. These routes
-      // authenticate with a device token, NOT with the page session, and they never fall back to
-      // the password-disabled bypass in authorizeSession().
-      if (url.pathname.startsWith('/__device/')) {
+      if (path.startsWith('/__device/')) {
         this.handleDevice(req, res, url)
         return
       }
 
-      if (url.pathname === '/__login') {
+      if (path === '/__login') {
         this.handleLogin(req, res, url)
         return
       }
 
-      // A scanned QR carries ?t=<one-time ticket>: the owner's own screen vouches for the caller,
-      // so it enters without typing the password. Already signed-in browsers just lose the token.
-      if (url.searchParams.has('t') && !this.authorizeSession(req)) {
-        this.handleTicket(req, res, url)
+      if (path === '/__waiting') {
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+          this.serveText(res, 405, 'Method not allowed.\n')
+          return
+        }
+        this.handleWaiting(req, res, url)
         return
       }
 
-      if (!this.authorizeSession(req)) {
-        // Nothing in a URL grants a session any more (the QR used to carry ?p=<password>, which
-        // turned a screenshot into a permanent key). A browser now gets the password form, and
-        // the same admission rules the app uses: password, then approval when required.
+      const session = this.authorizedSession(req)
+      if (!session) {
         const loginDevice = this.touchDevice(req)
-        if (this.isBlacklisted(loginDevice.id)) {
+        if (this.isBlacklisted(loginDevice.id) || this.registry?.get(loginDevice.id)?.state === 'blocked') {
           this.serveText(res, 403, 'This device is blocked.\n')
           return
         }
@@ -1286,6 +1810,8 @@ export class GatewayProxy {
         clean.searchParams.delete('p')
         clean.searchParams.delete('t')
         req.url = clean.pathname + (clean.search || '')
+      } else {
+        req.url = url.pathname + url.search
       }
       // Host-only settings never apply from a remote page: the switch, the password, the
       // entry mode, device approvals, the pool location. The panel hides them, and this is the
@@ -1341,7 +1867,7 @@ export class GatewayProxy {
           return
         }
         let headers = upstreamRes.headers
-        if (device?.isNew) headers = GatewayProxy.withCookie(headers, this.deviceCookieValue(device.id))
+        if (device?.isNew) headers = GatewayProxy.withCookie(headers, this.deviceCookieValue(req, device.id))
         let path = req.url ?? '/'
         const queryAt = path.indexOf('?')
         if (queryAt !== -1) path = path.slice(0, queryAt)
@@ -1394,41 +1920,40 @@ export class GatewayProxy {
 
   handleUpgrade(req, socket) {
     try {
-      if (!this.authorizeSession(req)) {
-        socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+      if (!this.publicEndpointAllowed()) {
+        socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
         return
       }
-      const session = this.resolveSession(readCookie(req, SESSION_COOKIE))
-      const cookieDevice = readCookie(req, DEVICE_COOKIE)
-      const deviceId = (session && session.deviceId) || cookieDevice
+      const url = new URL(req.url ?? '/', 'http://dsh.invalid')
+      const path = canonicalPath(url.pathname)
+      if (!path) {
+        socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
+        return
+      }
+      if (isPluginManagementPath(path)) {
+        socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
+        return
+      }
       const refuse = (reason) => {
         this.options.log?.('gateway: refusing websocket (' + reason + ')')
         socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
       }
-      // A session that outlived its approval (removed / blocked) must not keep a page alive.
-      if (session && this.revokedByPolicy(session.deviceId)) {
-        refuse('device revoked')
+      if (!this.requestOriginAllowed(req, true)) {
+        refuse('origin')
         return
       }
-      if (session && session.deviceId && this.admissionPolicy.requireApproval) {
-        const record = this.registry?.get(session.deviceId)
-        if (!record || record.state !== 'trusted') {
-          refuse('device not trusted')
-          return
-        }
+      const session = this.authorizedSession(req)
+      if (!session) {
+        socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+        return
       }
-      if (session && session.deviceId) {
-        const limit = this.onlineLimit(session.deviceId)
-        if (limit) {
-          refuse('online limit ' + limit.online + '/' + limit.max)
-          return
-        }
+      req.url = path + url.search
+      const limit = this.onlineLimit(session.deviceId, session.id)
+      if (limit) {
+        refuse('online limit ' + limit.online + '/' + limit.max)
+        return
       }
-      let entry = typeof deviceId === 'string' && deviceId.length >= 6 ? this.devices.get(deviceId) : undefined
-      if (!entry && typeof deviceId === 'string' && deviceId.length >= 6) {
-        entry = { firstSeen: Date.now(), lastSeen: Date.now(), pages: 0, hadPage: false }
-        this.devices.set(deviceId, entry)
-      }
+      const entry = this.runtimeDevice(session.deviceId) || { firstSeen: Date.now(), lastSeen: Date.now(), pages: 0, hadPage: false }
       if (entry) {
         entry.pages += 1
         entry.hadPage = true
@@ -1449,17 +1974,16 @@ export class GatewayProxy {
       socket.once('error', release)
       socket.once('timeout', release)
       try { socket.setNoDelay(true) } catch { /* ignore */ }
-      if (session) {
-        const sockets = this.sessionSockets.get(session.id) ?? new Set()
-        sockets.add(socket)
-        this.sessionSockets.set(session.id, sockets)
-        socket.once('close', () => {
-          const current = this.sessionSockets.get(session.id)
-          if (!current) return
-          current.delete(socket)
-          if (current.size === 0) this.sessionSockets.delete(session.id)
-        })
-      }
+      const sockets = this.sessionSockets.get(session.id) ?? new Set()
+      sockets.add(socket)
+      this.sessionSockets.set(session.id, sockets)
+      socket.once('close', () => {
+        const current = this.sessionSockets.get(session.id)
+        if (!current) return
+        current.delete(socket)
+        if (current.size === 0) this.sessionSockets.delete(session.id)
+      })
+      this.touchActiveSessions(session.deviceId)
       this.connectUpgrade(req, socket, release, 0)
     } catch (error) {
       this.options.log?.(`gateway upgrade failed: ${String(error)}`)

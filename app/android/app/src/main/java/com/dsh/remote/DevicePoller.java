@@ -20,13 +20,6 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.security.cert.X509Certificate;
-
-import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLSocketFactory;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
 
 /**
  * The phone half of the device channel ("phone as hands", P1 = status only).
@@ -255,16 +248,11 @@ final class DevicePoller {
         }
     }
 
-    /** One POST through the same trust rules as the login path (tunnel certificate is self-signed). */
+    /** One POST through platform TLS validation and the allowed gateway URL rules. */
     private Reply post(String path, String payload) throws Exception {
         URL url = new URL(base + path);
-        if (!MainActivity.isTunnelHost(url.getHost())) throw new Exception("host not allowed");
+        if (!MainActivity.isTunnelUrl(url)) throw new Exception("host or transport not allowed");
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-        if (connection instanceof HttpsURLConnection) {
-            HttpsURLConnection https = (HttpsURLConnection) connection;
-            https.setSSLSocketFactory(trustAllSocketFactory());
-            https.setHostnameVerifier((hostname, session) -> true);
-        }
         connection.setConnectTimeout(12000);
         connection.setReadTimeout(POLL_WAIT_MS + 10000);
         connection.setRequestMethod("POST");
@@ -290,19 +278,6 @@ final class DevicePoller {
         String line;
         while ((line = reader.readLine()) != null) text.append(line);
         return text.toString();
-    }
-
-    private static SSLSocketFactory trustAllSocketFactory() throws Exception {
-        TrustManager[] managers = new TrustManager[] {
-            new X509TrustManager() {
-                public void checkClientTrusted(X509Certificate[] chain, String authType) {}
-                public void checkServerTrusted(X509Certificate[] chain, String authType) {}
-                public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
-            }
-        };
-        SSLContext context = SSLContext.getInstance("TLS");
-        context.init(null, managers, new java.security.SecureRandom());
-        return context.getSocketFactory();
     }
 
     private void sleep(long ms) {

@@ -5,8 +5,8 @@
  * user who used the CLI proxy first keeps the same password. 0600 where the platform
  * honours it (Windows ACLs otherwise).
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
-import { join } from 'node:path'
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { randomBytes } from 'node:crypto'
 
@@ -16,7 +16,7 @@ export const STATE_FILE_NAME = 'plugin-state.json'
 /** @returns {string} absolute path of the shared remote-access directory */
 export function resolveStateDir() {
   const home = process.env.DSH_HOME || join(homedir(), '.dsh')
-  return join(home, STATE_DIR_NAME)
+  return resolve(home, STATE_DIR_NAME)
 }
 
 /** @returns {string} absolute path of this plugin's state file */
@@ -39,7 +39,7 @@ function defaultState() {
     uiMode: 'auto',
     /** absolute folder for the shared file pool (null = <state dir>/files) */
     filePoolDir: null,
-    /** display password for the remote login page (plain text by design: the UI shows it) */
+    /** display password for the remote login page, shown only on local request */
     password: null,
     /** when true the gateway requires the access password (verified through POST /__verify) */
     passwordEnabled: true,
@@ -66,39 +66,98 @@ const TUNNEL_MODES = new Set(['tailscale', 'external', 'quick', 'lan', 'none'])
 
 /** @returns {object} loaded state, repaired with defaults */
 export function loadState() {
+  const dir = resolveStateDir()
   const file = resolveStateFile()
-  if (!existsSync(file)) return defaultState()
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8'))
-    const base = defaultState()
-    return {
-      ...base,
-      ...parsed,
-      version: 1,
-      tunnel: TUNNEL_MODES.has(parsed.tunnel) ? parsed.tunnel : 'tailscale',
-      externalUrl: typeof parsed.externalUrl === 'string' && parsed.externalUrl.length > 0 ? parsed.externalUrl : null,
-      lanAddress: typeof parsed.lanAddress === 'string' && parsed.lanAddress.length > 0 ? parsed.lanAddress : null,
-      uiMode: ['auto', 'phone', 'tablet', 'compat'].includes(parsed.uiMode) ? parsed.uiMode : 'auto',
-      filePoolDir: typeof parsed.filePoolDir === 'string' && parsed.filePoolDir.trim().length > 0 ? parsed.filePoolDir.trim() : null,
-      passwordEnabled: parsed.passwordEnabled !== false,
-      sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
-      blacklist: Array.isArray(parsed.blacklist) ? parsed.blacklist : []
+    chmodSync(dir, 0o700)
+  } catch (error) {
+    if (process.platform !== 'win32' && error?.code !== 'ENOENT') throw error
+  }
+  try {
+    chmodSync(file, 0o600)
+  } catch (error) {
+    if (process.platform !== 'win32' && error?.code !== 'ENOENT') throw error
+  }
+  let text
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ENOENT') return defaultState()
+    throw new Error(`远程访问状态文件无法读取：${error instanceof Error ? error.message : String(error)}`)
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch (error) {
+    throw new Error(`远程访问状态文件损坏：${error instanceof Error ? error.message : String(error)}`)
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('远程访问状态文件格式无效')
+  }
+  for (const key of ['sessions', 'blacklist', 'devices', 'pendingRequests', 'audit']) {
+    if (parsed[key] !== undefined && !Array.isArray(parsed[key])) {
+      throw new Error(`远程访问状态字段无效：${key}`)
     }
-  } catch {
-    return defaultState()
+  }
+  if (parsed.settings !== undefined && (!parsed.settings || typeof parsed.settings !== 'object' || Array.isArray(parsed.settings))) {
+    throw new Error('远程访问状态字段无效：settings')
+  }
+  const base = defaultState()
+  return {
+    ...base,
+    ...parsed,
+    version: 1,
+    tunnel: TUNNEL_MODES.has(parsed.tunnel) ? parsed.tunnel : 'tailscale',
+    externalUrl: typeof parsed.externalUrl === 'string' && parsed.externalUrl.length > 0 ? parsed.externalUrl : null,
+    lanAddress: typeof parsed.lanAddress === 'string' && parsed.lanAddress.length > 0 ? parsed.lanAddress : null,
+    uiMode: ['auto', 'phone', 'tablet', 'compat'].includes(parsed.uiMode) ? parsed.uiMode : 'auto',
+    filePoolDir: typeof parsed.filePoolDir === 'string' && parsed.filePoolDir.trim().length > 0 ? parsed.filePoolDir.trim() : null,
+    passwordEnabled: true,
+    sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
+    blacklist: Array.isArray(parsed.blacklist) ? parsed.blacklist : [],
+    devices: Array.isArray(parsed.devices) ? parsed.devices : [],
+    pendingRequests: Array.isArray(parsed.pendingRequests) ? parsed.pendingRequests : [],
+    audit: Array.isArray(parsed.audit) ? parsed.audit : []
   }
 }
 
-/** Persist state atomically enough for a small JSON document. */
 export function saveState(state) {
   const dir = resolveStateDir()
-  mkdirSync(dir, { recursive: true })
-  const file = resolveStateFile()
-  writeFileSync(file, JSON.stringify(state, null, 2))
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
   try {
-    chmodSync(file, 0o600)
-  } catch {
-    /* Windows: ACLs come from the profile directory */
+    chmodSync(dir, 0o700)
+  } catch (error) {
+    if (process.platform !== 'win32') throw error
+  }
+  const file = resolveStateFile()
+  const temp = `${file}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`
+  const contents = JSON.stringify({ ...state, passwordEnabled: true }, null, 2)
+  let fd = null
+  try {
+    fd = openSync(temp, 'wx', 0o600)
+    writeFileSync(fd, contents, 'utf8')
+    fsyncSync(fd)
+    closeSync(fd)
+    fd = null
+    renameSync(temp, file)
+    try {
+      chmodSync(file, 0o600)
+    } catch (error) {
+      if (process.platform !== 'win32') throw error
+    }
+    let dirFd = null
+    try {
+      dirFd = openSync(dir, 'r')
+      fsyncSync(dirFd)
+    } catch {} finally {
+      if (dirFd !== null) closeSync(dirFd)
+    }
+  } catch (error) {
+    if (fd !== null) closeSync(fd)
+    try {
+      unlinkSync(temp)
+    } catch {}
+    throw error
   }
 }
 
@@ -114,8 +173,14 @@ export function randomPassword(bytes = 9) {
  */
 export function readLegacyPassword() {
   try {
-    const text = readFileSync(join(resolveStateDir(), 'password.txt'), 'utf8').trim()
-    return text.length >= 6 ? text : null
+    const file = join(resolveStateDir(), 'password.txt')
+    try {
+      chmodSync(file, 0o600)
+    } catch (error) {
+      if (process.platform !== 'win32') throw error
+    }
+    const text = readFileSync(file, 'utf8').trim()
+    return text.length >= 12 ? text : null
   } catch {
     return null
   }

@@ -1,6 +1,6 @@
 {
   "name": "dsh-mobile-harness",
-  "version": "1.2.0",
+  "version": "1.1.0",
   "type": "module",
   "description": "DSH Mobile Harness — bring your desktop DeepSeek Harness session to your phone: native Android app, QR pairing, LAN / virtual-network entry, device admission control.",
   "license": "MIT",

@@ -113,7 +113,7 @@
   <p class="hint">
     「相机扫码」会打开取景框，把电脑上的二维码放进去就自动识别，不用按快门。二维码只含地址（截图外发也进不来密码）：识别后会用这台手机记住的密码自动登录，第一次仍需手填一次密码。<br />
     密码在本机校验，通过后由电脑弹出配对码，两边数字一致才算登录成功。<br />
-    手动填地址和密码同理。首次连接会提示证书不受信任（中转的自动证书），点「高级 → 继续前往」即可。
+    HTTPS 入口必须使用 Android 系统信任的证书；证书错误或自签证书会被拒绝。局域网入口可使用私有 IPv4 的 HTTP 地址。
   </p>
 
   <!-- Camera viewfinder: the page decodes frames itself, so a QR only has to sit in the frame. -->
@@ -151,7 +151,7 @@
       var connectButton = document.getElementById('connect')
       // Which address the text currently sitting in the password field was meant for.
       var fieldBase = ''
-      // The QR carries a one-time ticket (?t=), never the password: the desktop burns it on first
+      // The QR carries a one-time ticket in its fragment, never the password: the desktop burns it on first
       // use, so a screenshot is worthless. The app trades it in for a session, which is why a scan
       // works even when this phone has no password stored at all (0.5.6).
       var scanTicket = ''
@@ -555,9 +555,11 @@
         if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false
         // A code produced by an older build may still carry ?p=<password>. It is not a key any
         // more: the address is all that is used, so a shared screenshot cannot log anyone in.
-        // ?t= is the one-time scan ticket: kept aside for the native login, stripped from the
+        // #t= is the one-time scan ticket: kept aside for the native login, stripped from the
         // address so it never ends up in the field, history or a screenshot of this page.
-        scanTicket = parsed.searchParams.get('t') || ''
+        var fragmentParams = new URLSearchParams(parsed.hash.slice(1))
+        scanTicket = fragmentParams.get('t') || parsed.searchParams.get('t') || ''
+        parsed.searchParams.delete('t')
         parsed.search = ''
         parsed.hash = ''
         if (!parsed.pathname.endsWith('/')) parsed.pathname += '/'

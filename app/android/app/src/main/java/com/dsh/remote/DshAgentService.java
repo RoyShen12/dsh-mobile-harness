@@ -95,6 +95,8 @@ public final class DshAgentService extends AccessibilityService {
         } catch (Exception error) {
             String message = error.getMessage();
             throw new AgentError("action_failed", message == null || message.isEmpty() ? "\u624b\u673a\u6267\u884c\u5931\u8d25" : message);
+        } finally {
+            if (!"status".equals(op) && !"screen".equals(op)) ScreenReader.invalidate();
         }
         throw new AgentError("not_supported", "\u4e0d\u652f\u6301\u7684\u64cd\u4f5c\uff1a" + op);
     }
@@ -109,6 +111,9 @@ public final class DshAgentService extends AccessibilityService {
     private JSONObject screen() throws Exception {
         String own = getPackageName();
         ScreenReader.Snapshot snapshot = ScreenReader.capture(this, own, isLocked(), labelOf(own));
+        if (AgentGuard.blockedPackage(snapshot.pkg)) {
+            throw new AgentError("blocked_by_policy", "\u624b\u673a\u62a4\u680f\u62d2\u7edd\u8bfb\u53d6\u91d1\u878d\u6216\u7cfb\u7edf\u654f\u611f\u9875\u9762");
+        }
         JSONObject out = new JSONObject();
         out.put("snapshotId", snapshot.id);
         out.put("app", snapshot.app);
@@ -149,7 +154,7 @@ public final class DshAgentService extends AccessibilityService {
         }
         if (AgentGuard.riskyText(item.text)) {
             throw new AgentError("confirm_required",
-                    "\u8fd9\u4e00\u9879\u662f\u5371\u9669\u64cd\u4f5c\uff08" + item.text + "\uff09\uff1a\u5148\u95ee\u7528\u6237\u672c\u4eba\u8981\u4e0d\u8981\u70b9");
+                    "\u8fd9\u4e00\u9879\u53ef\u80fd\u6d89\u53ca\u4ed8\u6b3e\u3001\u9a8c\u8bc1\u7801\u6216\u6388\u6743\uff0c\u9700\u8981\u7531\u7528\u6237\u672c\u4eba\u786e\u8ba4");
         }
         AccessibilityNodeInfo node = item.node;
         if (node == null || !refresh(node)) {
@@ -173,6 +178,9 @@ public final class DshAgentService extends AccessibilityService {
         ScreenReader.Item item = snapshot.find(n);
         if (item == null) {
             throw new AgentError("bad_target", "\u7f16\u53f7 " + n + " \u4e0d\u5728\u8fd9\u6b21\u5feb\u7167\u91cc\uff1a\u91cd\u65b0 screen \u4e00\u6b21");
+        }
+        if (AgentGuard.riskyText(item.text)) {
+            throw new AgentError("confirm_required", "\u8fd9\u4e2a\u8f93\u5165\u9879\u53ef\u80fd\u6d89\u53ca\u4ed8\u6b3e\u3001\u9a8c\u8bc1\u7801\u6216\u6388\u6743\uff0c\u9700\u8981\u7531\u7528\u6237\u672c\u4eba\u786e\u8ba4");
         }
         AccessibilityNodeInfo node = item.node;
         if (node == null || !refresh(node)) {
@@ -205,6 +213,7 @@ public final class DshAgentService extends AccessibilityService {
     }
 
     private JSONObject key(JSONObject args) throws Exception {
+        currentSnapshot(args);
         String name = args.optString("key", "").trim().toLowerCase(Locale.ROOT);
         int action;
         switch (name) {
@@ -235,9 +244,9 @@ public final class DshAgentService extends AccessibilityService {
         String direction = args.optString("direction", "forward").trim().toLowerCase(Locale.ROOT);
         boolean forward = !"backward".equals(direction) && !"up".equals(direction);
         AccessibilityNodeInfo target = null;
-        ScreenReader.Snapshot snapshot = ScreenReader.last();
+        ScreenReader.Snapshot snapshot = currentSnapshot(args);
         int n = args.optInt("n", -1);
-        if (snapshot != null && n > 0) {
+        if (n > 0) {
             ScreenReader.Item item = snapshot.find(n);
             if (item == null) throw new AgentError("bad_target", "\u7f16\u53f7 " + n + " \u4e0d\u5728\u8fd9\u6b21\u5feb\u7167\u91cc\uff1a\u91cd\u65b0 screen \u4e00\u6b21");
             target = item.node;
@@ -301,6 +310,7 @@ public final class DshAgentService extends AccessibilityService {
     }
 
     private JSONObject openApp(JSONObject args) throws Exception {
+        currentSnapshot(args);
         String target = args.optString("target", "").trim();
         if (target.isEmpty()) {
             throw new AgentError("bad_target", "open_app \u9700\u8981 target\uff08\u5e94\u7528\u5305\u540d\u6216\u540d\u5b57\uff09");
@@ -310,7 +320,7 @@ public final class DshAgentService extends AccessibilityService {
             throw new AgentError("not_found", "\u627e\u4e0d\u5230\u5e94\u7528\uff1a" + target);
         }
         if (AgentGuard.blockedPackage(pkg)) {
-            throw new AgentError("blocked_by_policy", "\u300c" + labelOf(pkg) + "\u300d\u5c5e\u4e8e\u4e0d\u4ee3\u64cd\u4f5c\u7684\u5e94\u7528\uff08\u652f\u4ed8/\u94f6\u884c/\u7cfb\u7edf\u8bbe\u7f6e\uff09");
+            throw new AgentError("blocked_by_policy", "\u624b\u673a\u62a4\u680f\u62d2\u7edd\u6253\u5f00\u91d1\u878d\u6216\u7cfb\u7edf\u654f\u611f\u5e94\u7528");
         }
         Intent launch = getPackageManager().getLaunchIntentForPackage(pkg);
         if (launch == null) {
@@ -371,11 +381,18 @@ public final class DshAgentService extends AccessibilityService {
             throw new AgentError("stale_snapshot", "\u8fd8\u6ca1\u6709\u5c4f\u5e55\u5feb\u7167\uff1a\u5148\u8c03\u7528 phone screen \u8bfb\u5c4f");
         }
         String id = args.optString("snapshotId", "");
-        if (!id.isEmpty() && !id.equals(snapshot.id)) {
+        if (id.isEmpty() || !id.equals(snapshot.id)) {
             throw new AgentError("stale_snapshot", "\u5feb\u7167\u5df2\u8fc7\u671f\uff08\u754c\u9762\u53d8\u4e86\uff09\uff1a\u91cd\u65b0\u8c03\u7528 phone screen");
         }
         if (snapshot.expired()) {
             throw new AgentError("stale_snapshot", "\u5feb\u7167\u8d85\u8fc7 60 \u79d2\uff1a\u91cd\u65b0\u8c03\u7528 phone screen");
+        }
+        if (AgentGuard.blockedPackage(snapshot.pkg)) {
+            throw new AgentError("blocked_by_policy", "\u624b\u673a\u62a4\u680f\u62d2\u7edd\u64cd\u4f5c\u91d1\u878d\u6216\u7cfb\u7edf\u654f\u611f\u5e94\u7528");
+        }
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null || !snapshot.pkg.equals(String.valueOf(root.getPackageName()))) {
+            throw new AgentError("stale_snapshot", "\u624b\u673a\u754c\u9762\u5df2\u7ecf\u53d8\u4e86\uff1a\u91cd\u65b0\u8c03\u7528 phone screen");
         }
         return snapshot;
     }

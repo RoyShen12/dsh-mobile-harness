@@ -94,6 +94,10 @@ final class ScreenReader {
         return last;
     }
 
+    static synchronized void invalidate() {
+        last = null;
+    }
+
     /**
      * Reads the active window. {@code ownPackage} is skipped entirely: the app's own pages carry the
      * pairing code and the access password, and a screen reader must never hand those back.

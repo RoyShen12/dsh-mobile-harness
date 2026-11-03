@@ -2,8 +2,8 @@
  * Browser half of the in-app remote-access switch.
  *
  * Registers the sidebar entry ("远程") and the main panel: a switch plus a "小屏幕" that
- * shows the phone URL, the password, a scannable QR (URL + password), the tunnel and the
- * live connection count. Status is polled every 2 s while the panel is mounted.
+ * shows the phone URL, an explicitly revealed password, a one-time QR ticket and the
+ * live connection count. Management is available through the local DSH connection only.
  *
  * Constraints from the shipped plugin contract:
  *  - plain JS; only `react` / `react-dom` come from the platform seed;
@@ -852,6 +852,7 @@ globalThis.__ModuleLoader__.load({
       const [status, setStatus] = useState(null)
       const [fetchError, setFetchError] = useState(null)
       const [reveal, setReveal] = useState(false)
+      const [password, setPassword] = useState('')
       const [qrRevealUntil, setQrRevealUntil] = useState(0)
       const [actionError, setActionError] = useState(null)
       const [busy, setBusy] = useState(false)
@@ -878,7 +879,7 @@ globalThis.__ModuleLoader__.load({
       const load = async () => {
         try {
           const response = await fetch(STATUS_PATH, { credentials: 'include', cache: 'no-store' })
-          if (!response.ok) throw new Error('HTTP ' + response.status)
+          if (!response.ok) throw new Error(response.status === 403 ? '请在电脑本机管理远程访问' : 'HTTP ' + response.status)
           const body = await response.json()
           setStatus(body)
           setFetchError(null)
@@ -918,11 +919,16 @@ globalThis.__ModuleLoader__.load({
         return () => { alive = false }
       }, [])
 
+      useEffect(() => {
+        if (!reveal) return undefined
+        const timer = setTimeout(() => { setReveal(false); setPassword('') }, 30000)
+        return () => clearTimeout(timer)
+      }, [reveal])
+
       const enabled = Boolean(status?.enabled)
       const phase = status?.phase || 'disabled'
       const phaseBusy = phase === 'starting' || phase === 'stopping' || busy || Boolean(status?.busy)
       const publicUrl = status?.publicUrl || ''
-      const password = status?.password || ''
       const qr = status?.qr || null
       const devices = Number(status?.devices ?? status?.clients ?? 0)
       const pages = Number(status?.pages ?? status?.clients ?? 0)
@@ -1109,18 +1115,20 @@ globalThis.__ModuleLoader__.load({
         }
       }
 
-      const togglePasswordProtection = async () => {
+      const togglePasswordReveal = async () => {
+        if (reveal) {
+          setReveal(false)
+          setPassword('')
+          return
+        }
         setActionError(null)
-        setBusy(true)
         try {
-          const next = await postJson(PASSWORD_PATH, { enabled: !status?.passwordEnabled })
-          if (next?.error) setActionError(next.error)
-          else if (next && next.phase) setStatus(next)
+          const result = await postJson(PASSWORD_PATH, { action: 'reveal' })
+          if (!result?.password) throw new Error(result?.error || '密码读取失败')
+          setPassword(result.password)
+          setReveal(true)
         } catch (error) {
           setActionError(error instanceof Error ? error.message : String(error))
-        } finally {
-          setBusy(false)
-          load()
         }
       }
 
@@ -1129,6 +1137,9 @@ globalThis.__ModuleLoader__.load({
         setBusy(true)
         try {
           const result = await postJson(PASSWORD_PATH, {})
+          if (result?.error) throw new Error(result.error)
+          setPassword('')
+          setReveal(false)
           if (result && result.snapshot) setStatus(result.snapshot)
         } catch (error) {
           setActionError(error instanceof Error ? error.message : String(error))
@@ -1273,7 +1284,7 @@ globalThis.__ModuleLoader__.load({
               : '需要本机已登录 Tailscale，并已把这个网关端口 serve 出去。不推荐：走 DERP 中继时延迟高，能用外部隧道或 Cloudflare 就别用它。'
       const connectTip = enabled
         ? (status?.tunnel === 'external'
-            ? '首次访问会提示证书不受信任：点「高级 → 继续前往」。'
+            ? '外部隧道须使用 HTTPS 和受信任证书；发现证书错误时先检查入口配置。'
             : status?.tunnel === 'quick'
               ? 'Cloudflare 免费隧道的地址每次重启都会变，换了地址要重新扫码。'
               : status?.tunnel === 'none'
@@ -1281,7 +1292,7 @@ globalThis.__ModuleLoader__.load({
                 : status?.tunnel === 'lan'
                   ? '手机要和电脑在同一网段；用虚拟组网就先确认两端连着同一个网络。主地址进不去就换列表里另一个地址。'
                   : '手机需安装 Tailscale 并登录同一账号；走中继时延迟会明显偏高。')
-        : '打开开关后生成二维码：一次性登录链接（10 分钟），扫一次就失效，截图外发也进不来。'
+        : '打开开关后生成二维码：一次性票据（10 分钟），请保管好截图，并在电脑核对配对码。'
 
       return h(
         'div',
@@ -1438,11 +1449,11 @@ globalThis.__ModuleLoader__.load({
               ),
               h(
                 Field,
-                { label: '密码', tip: '重置后所有已连接的手机都要重新输密码。' },
-                h('span', { className: CLS.value + ' ' + CLS.mono }, password ? (reveal ? password : '••••••••') : '—'),
+                { label: '密码', tip: '仅在本机按需显示，30 秒后隐藏。重置会撤销全部会话、设备信任与手机令牌。' },
+                h('span', { className: CLS.value + ' ' + CLS.mono }, reveal ? password : '••••••••'),
                 h(
                   'button',
-                  { type: 'button', className: CLS.button + ' ' + CLS.buttonQuiet, onClick: () => setReveal((v) => !v) },
+                  { type: 'button', className: CLS.button + ' ' + CLS.buttonQuiet, onClick: togglePasswordReveal },
                   reveal ? '隐藏' : '显示'
                 ),
                 h(CopyButton, { text: password }),
@@ -1462,23 +1473,12 @@ globalThis.__ModuleLoader__.load({
                 Field,
                 {
                   label: '验证',
-                  tip: '关掉后任何人拿到网址就能进，只在完全信任的网络里用；设备准入的配对码仍然有效。'
+                  tip: '网关始终要求密码或一次性扫码票据，并执行设备准入与撤销检查。'
                 },
                 h(
                   'span',
                   { className: CLS.value },
-                  status?.passwordEnabled === false ? '已关闭（免密码）' : '每次新设备都要输密码'
-                ),
-                h(
-                  'button',
-                  {
-                    type: 'button',
-                    className: CLS.button + ' ' + CLS.buttonQuiet,
-                    disabled: phaseBusy,
-                    onClick: togglePasswordProtection,
-                    title: status?.passwordEnabled === false ? '重新要求输入密码' : '免密码进入（不推荐）'
-                  },
-                  status?.passwordEnabled === false ? '开启验证' : '关闭验证'
+                  '密码验证已开启'
                 )
               ),
               h('p', { className: CLS.cardNote }, connectTip)
@@ -1828,7 +1828,7 @@ globalThis.__ModuleLoader__.load({
             ),
             h(
               Field,
-              { label: '在线上限', tip: '0 = 不限；同一台手机多开标签算 1 台。' },
+              { label: '在线上限', tip: '0 = 不限；按活跃登录会话计数，App、脚本与浏览器使用相同额度。' },
               h('input', {
                 className: CLS.input,
                 style: { maxWidth: '72px', flex: 'none', textAlign: 'center' },

@@ -11,18 +11,17 @@
  * plugin state dir, the URL is scraped from cloudflared's own log line, and an unexpected exit
  * is retried with backoff (each retry publishes a new URL through onUrl).
  */
-import { spawn } from 'node:child_process'
-import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs'
-import { join } from 'node:path'
+import { spawn, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { chmodSync, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { gunzipSync } from 'node:zlib'
+import { isAbsolute, join } from 'node:path'
 import { get as httpGet } from 'node:http'
 import { get as httpsGet } from 'node:https'
 
-/** The one official release asset; every mirror below serves a copy of it. */
-const OFFICIAL_DOWNLOAD_URL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe'
+export const CLOUDFLARED_VERSION = '2026.10.7'
+const RELEASE_ROOT = `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}`
 
-/** GitHub proxies, in rough order of how often they answer from mainland China. A proxy is only a
- * prefix: https://<proxy>/<the full github url>. None of them is guaranteed, which is why this is a
- * list and why the panel can stop the download and retry. */
 const MIRROR_PROXIES = [
   'https://ghfast.top/',
   'https://gh-proxy.com/',
@@ -32,29 +31,120 @@ const MIRROR_PROXIES = [
   'https://gh.llkk.cc/'
 ]
 
-/** Hosts that mirror github.com itself: same path, different domain. */
-const MIRROR_HOSTS = [
-  'https://kkgithub.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe'
-]
-
-export const QUICK_TUNNEL_DOWNLOAD_URLS = [
-  OFFICIAL_DOWNLOAD_URL,
-  ...MIRROR_PROXIES.map((proxy) => proxy + OFFICIAL_DOWNLOAD_URL),
-  ...MIRROR_HOSTS
-]
-
-/** Download order for one run: an explicit DSH_CLOUDFLARED_URL wins (for a LAN mirror or an
- * accelerator the user already trusts), then the built-in list. */
-export function downloadUrls(env = process.env) {
-  const custom = String(env.DSH_CLOUDFLARED_URL || '').trim()
-  const urls = custom ? [custom, ...QUICK_TUNNEL_DOWNLOAD_URLS] : QUICK_TUNNEL_DOWNLOAD_URLS.slice()
-  return [...new Set(urls)]
+const RELEASE_ASSETS = {
+  win32: {
+    x64: { file: 'cloudflared-windows-amd64.exe', sha256: '2493dbc168923bb3e59e5e7716f71deced92992eea9acd6e9d74f84ac7751343' },
+    ia32: { file: 'cloudflared-windows-386.exe', sha256: '88c6b972b410db0e26745f593510d772c825a13c5a2374819e3f13a05b333082' }
+  },
+  darwin: {
+    x64: { file: 'cloudflared-darwin-amd64.tgz', sha256: '02f3edfd87684dd5b705607688e4eb4b323f6e777b81e7b3a85af556aa356848', binarySha256: '5c55e77da7012cebca19170357e196176c48c9647cc2ead404702fa125ddbd86' },
+    arm64: { file: 'cloudflared-darwin-arm64.tgz', sha256: '3586ccf397e98e5f437e60e7c307ca6ac463e110580503af8bb8e6f9ebf831bd', binarySha256: '2136431d5eb467bf447d2ee514b713e192719b143aec1d9e09bf7dc290d5bb12' }
+  },
+  linux: {
+    x64: { file: 'cloudflared-linux-amd64', sha256: '1f99fb518b83dec2ba8d870a7cc991d82a77e6196295a3d2754ba17ab9f91872' },
+    ia32: { file: 'cloudflared-linux-386', sha256: '4823d2f038395617e04e4070601ab45c0c43f31f15ee7586be299e19ef49d46e' },
+    arm64: { file: 'cloudflared-linux-arm64', sha256: '3df43aedc9ff291d1735b5cb576cb97e0b157488796db2e32b28aecabb445775' },
+    arm: { file: 'cloudflared-linux-arm', sha256: '74f690f6707182839b63e0465726c7776dd63f0a174390b911d5d71f35cab94e' }
+  }
 }
+
+function releaseAsset(platform = process.platform, arch = process.arch) {
+  const asset = RELEASE_ASSETS[platform]?.[arch]
+  if (!asset) return null
+  return {
+    ...asset,
+    binarySha256: asset.binarySha256 || asset.sha256,
+    archive: asset.file.endsWith('.tgz')
+  }
+}
+
+export function downloadUrls(env = process.env, platform = process.platform, arch = process.arch) {
+  const asset = releaseAsset(platform, arch)
+  if (!asset) return []
+  const official = `${RELEASE_ROOT}/${asset.file}`
+  const mirrors = MIRROR_PROXIES.map((proxy) => proxy + official)
+  const mirrorHost = official.replace('https://github.com/', 'https://kkgithub.com/')
+  const custom = String(env?.DSH_CLOUDFLARED_URL || '').trim()
+  let customUrl = null
+  if (custom) {
+    try {
+      const parsed = new URL(custom)
+      if (parsed.protocol === 'https:' && !parsed.username && !parsed.password) customUrl = parsed.toString()
+    } catch {}
+  }
+  return [...new Set([...(customUrl ? [customUrl] : []), official, ...mirrors, mirrorHost])]
+}
+
+export const QUICK_TUNNEL_DOWNLOAD_URLS = downloadUrls(process.env)
 
 const QUICK_HOST_PATTERN = /https:\/\/[a-z0-9][a-z0-9-]*\.trycloudflare\.com/
 const MIN_BINARY_BYTES = 8 * 1024 * 1024
+const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
+const MAX_BINARY_BYTES = 200 * 1024 * 1024
 const START_TIMEOUT_MS = 35000
 const MAX_RESTARTS = 8
+
+function sha256File(file) {
+  return createHash('sha256').update(readFileSync(file)).digest('hex')
+}
+
+function childEnvironment(extra = {}) {
+  const result = {}
+  for (const key of ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'USERPROFILE', 'HOME']) {
+    if (typeof process.env[key] === 'string') result[key] = process.env[key]
+  }
+  return { ...result, ...extra }
+}
+
+function validateVersion(exe) {
+  const result = spawnSync(exe, ['--version'], {
+    encoding: 'utf8',
+    env: childEnvironment(),
+    timeout: 8000,
+    windowsHide: true
+  })
+  if (result.error || result.status !== 0) {
+    throw new Error(`cloudflared --version 失败：${result.error ? result.error.message : `exit ${result.status}`}`)
+  }
+  const output = `${result.stdout || ''}\n${result.stderr || ''}`
+  const found = output.match(/\bversion\s+(\d{4}\.\d+\.\d+)\b/)
+  if (!found || found[1] !== CLOUDFLARED_VERSION) {
+    throw new Error(`cloudflared 版本不匹配，需要 ${CLOUDFLARED_VERSION}`)
+  }
+}
+
+function tarString(header, start, length) {
+  const end = header.indexOf(0, start)
+  return header.toString('utf8', start, end === -1 || end >= start + length ? start + length : end)
+}
+
+function extractMacBinary(archivePath, target) {
+  const content = gunzipSync(readFileSync(archivePath), { maxOutputLength: MAX_BINARY_BYTES * 2 })
+  let offset = 0
+  while (offset + 512 <= content.length) {
+    const header = content.subarray(offset, offset + 512)
+    if (header.every((byte) => byte === 0)) break
+    const name = tarString(header, 0, 100)
+    const prefix = tarString(header, 345, 155)
+    const path = prefix ? `${prefix}/${name}` : name
+    const sizeText = tarString(header, 124, 12).trim()
+    const size = Number.parseInt(sizeText || '0', 8)
+    if (!Number.isSafeInteger(size) || size < 0 || size > MAX_BINARY_BYTES) throw new Error('cloudflared 压缩包格式无效')
+    const dataStart = offset + 512
+    if (path === 'cloudflared' && (header[156] === 0 || header[156] === 48)) {
+      if (size < MIN_BINARY_BYTES) throw new Error('cloudflared 文件太小')
+      writeFileSync(target, content.subarray(dataStart, dataStart + size), { flag: 'wx', mode: 0o700 })
+      try {
+        chmodSync(target, 0o700)
+      } catch (error) {
+        if (process.platform !== 'win32') throw error
+      }
+      return size
+    }
+    offset = dataStart + Math.ceil(size / 512) * 512
+  }
+  throw new Error('cloudflared 压缩包缺少可执行文件')
+}
 
 /** Host name of a download URL, for the "downloading from …" line in the panel. */
 function hostOfUrl(url) {
@@ -96,13 +186,41 @@ export function downloadToFile(url, target, onProgress, options = {}) {
         fail(new Error('下载已取消'))
         return
       }
-      // http is only used by the tests' local stand-in server; production URLs are https.
-      const fetchUrl = current.startsWith('http://') ? httpGet : httpsGet
+      let parsedCurrent
+      try {
+        parsedCurrent = new URL(current)
+      } catch {
+        fail(new Error('下载地址无效'))
+        return
+      }
+      const localHttp = parsedCurrent.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(parsedCurrent.hostname)
+      if (parsedCurrent.protocol !== 'https:' && !localHttp) {
+        fail(new Error('下载地址必须使用 HTTPS'))
+        return
+      }
+      let intentionalDestroy = false
+      const fetchUrl = localHttp ? httpGet : httpsGet
       const request = fetchUrl(current, { headers: { 'user-agent': 'dsh-mobile-harness' } }, (response) => {
+        response.on('error', (error) => {
+          if (!intentionalDestroy) fail(error)
+        })
         const status = response.statusCode || 0
         if (status >= 300 && status < 400 && response.headers.location && hops < 5) {
           response.resume()
-          const next = new URL(response.headers.location, current).toString()
+          let next
+          let parsedNext
+          try {
+            next = new URL(response.headers.location, current).toString()
+            parsedNext = new URL(next)
+          } catch {
+            fail(new Error('下载重定向地址无效'))
+            return
+          }
+          const nextLocalHttp = parsedNext.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(parsedNext.hostname)
+          if (parsedNext.protocol !== 'https:' && !nextLocalHttp) {
+            fail(new Error('下载重定向必须使用 HTTPS'))
+            return
+          }
           attempt(next, hops + 1)
           return
         }
@@ -112,10 +230,18 @@ export function downloadToFile(url, target, onProgress, options = {}) {
           return
         }
         const total = Number(response.headers['content-length'] || 0)
+        if (total > MAX_DOWNLOAD_BYTES) {
+          intentionalDestroy = true
+          response.destroy()
+          fail(new Error('下载文件过大'))
+          return
+        }
         let seen = 0
         let lastEmit = 0
-        const sink = createWriteStream(target)
+        const sink = createWriteStream(target, { mode: 0o600 })
+        sink.on('error', fail)
         const onAbort = () => {
+          intentionalDestroy = true
           try { response.destroy() } catch { /* already gone */ }
           // Wait for the write stream to close before failing: on Windows an unlink of a file
           // that is still open just fails, and install() would leave a .part behind.
@@ -138,6 +264,15 @@ export function downloadToFile(url, target, onProgress, options = {}) {
         }
         response.on('data', (chunk) => {
           seen += chunk.length
+          if (seen > MAX_DOWNLOAD_BYTES) {
+            intentionalDestroy = true
+            response.unpipe(sink)
+            response.destroy()
+            const error = new Error('下载文件过大')
+            sink.once('close', () => fail(error))
+            sink.destroy()
+            return
+          }
           const now = Date.now()
           // Throttled so a 50 MB download does not rewrite the panel 1000 times a second.
           if (typeof onProgress === 'function' && now - lastEmit >= 250) {
@@ -146,14 +281,15 @@ export function downloadToFile(url, target, onProgress, options = {}) {
           }
         })
         response.pipe(sink)
-        sink.on('error', fail)
         sink.on('finish', () => {
           if (signal) signal.removeEventListener('abort', onAbort)
           if (typeof onProgress === 'function') onProgress({ received: seen, total })
           done(seen)
         })
       })
-      request.on('error', (error) => fail(error))
+      request.on('error', (error) => {
+        if (!intentionalDestroy) fail(error)
+      })
       request.setTimeout(30000, () => request.destroy(new Error('下载超时')))
     }
     attempt(url, 0)
@@ -193,48 +329,59 @@ export class CloudflaredTunnel {
     this.downloadTried = []
     /** Cached PATH lookup result; undefined means "not looked yet", null means "not there". */
     this.systemBinary = undefined
+    this.binaryHashes = new Map()
   }
 
   binaryPath() {
     return join(this.stateDir, 'bin', process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared')
   }
 
-  /** A cloudflared already installed on the machine (PATH) is used as-is: no 50 MB download for
-   * people who have it, and a way out when every mirror is blocked. */
-  findOnPath() {
-    if (this.systemBinary !== undefined) return this.systemBinary
+  binaryMatchesRelease(file, asset, force = false) {
+    try {
+      const info = statSync(file)
+      if (!info.isFile() || info.size < MIN_BINARY_BYTES || info.size > MAX_BINARY_BYTES) return false
+      const key = `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`
+      const cached = this.binaryHashes.get(file)
+      if (!force && cached?.key === key) return cached.digest === asset.binarySha256
+      const digest = sha256File(file)
+      this.binaryHashes.set(file, { key, digest })
+      return digest === asset.binarySha256
+    } catch {
+      return false
+    }
+  }
+
+  findOnPath(force = false) {
+    const asset = releaseAsset()
+    if (!asset) return null
+    if (this.systemBinary !== undefined && !force) {
+      if (this.systemBinary && this.binaryMatchesRelease(this.systemBinary, asset)) return this.systemBinary
+      if (!this.systemBinary) return null
+    }
     this.systemBinary = null
     const env = process.env
     const dirs = String(env.PATH || env.Path || '').split(process.platform === 'win32' ? ';' : ':')
     const names = process.platform === 'win32' ? ['cloudflared.exe'] : ['cloudflared']
     for (const raw of dirs) {
       const dir = raw.replace(/^"|"$/g, '').trim()
-      if (!dir) continue
+      if (!dir || !isAbsolute(dir)) continue
       for (const name of names) {
         const candidate = join(dir, name)
-        try {
-          const info = statSync(candidate)
-          if (info.isFile() && info.size >= MIN_BINARY_BYTES) {
-            this.systemBinary = candidate
-            return candidate
-          }
-        } catch {
-          /* keep looking */
+        if (this.binaryMatchesRelease(candidate, asset, force)) {
+          this.systemBinary = candidate
+          return candidate
         }
       }
     }
     return null
   }
 
-  /** Which binary a tunnel would use: the plugin's copy first, then one on PATH. */
-  resolveBinary() {
+  resolveBinary(force = false) {
+    const asset = releaseAsset()
+    if (!asset) return { exe: this.binaryPath(), source: null }
     const own = this.binaryPath()
-    try {
-      if (statSync(own).size >= MIN_BINARY_BYTES) return { exe: own, source: 'plugin' }
-    } catch {
-      /* not downloaded yet */
-    }
-    const system = this.findOnPath()
+    if (this.binaryMatchesRelease(own, asset, force)) return { exe: own, source: 'plugin' }
+    const system = this.findOnPath(force)
     if (system) return { exe: system, source: 'system' }
     return { exe: own, source: null }
   }
@@ -281,6 +428,8 @@ export class CloudflaredTunnel {
   /** Download the binary into <stateDir>/bin, trying every mirror until one answers. */
   async install() {
     if (this.downloading) return this.finishDownload()
+    const asset = releaseAsset()
+    if (!asset) throw new Error(`当前平台不支持 cloudflared ${CLOUDFLARED_VERSION} 自动下载`)
     this.downloading = true
     this.cancelled = false
     this.abortDownload = new AbortController()
@@ -295,6 +444,7 @@ export class CloudflaredTunnel {
     this.lastError = null
     const target = this.binaryPath()
     const temp = target + '.part'
+    const downloadTemp = asset.archive ? temp + '.tgz' : temp
     const markProgress = (received, total) => {
       const seconds = Math.max(0.5, (Date.now() - this.downloadStartedAt) / 1000)
       this.downloadReceived = received
@@ -305,10 +455,18 @@ export class CloudflaredTunnel {
         : null
     }
     const dropTemp = () => {
-      try { if (existsSync(temp)) unlinkSync(temp) } catch { /* ignore */ }
+      for (const file of new Set([temp, downloadTemp])) {
+        try { if (existsSync(file)) unlinkSync(file) } catch {}
+      }
     }
     try {
-      mkdirSync(join(this.stateDir, 'bin'), { recursive: true })
+      const binDir = join(this.stateDir, 'bin')
+      mkdirSync(binDir, { recursive: true, mode: 0o700 })
+      try {
+        chmodSync(binDir, 0o700)
+      } catch (error) {
+        if (process.platform !== 'win32') throw error
+      }
       const urls = downloadUrls()
       const failures = []
       for (const url of urls) {
@@ -321,16 +479,31 @@ export class CloudflaredTunnel {
           this.downloadTried.push(host)
           this.downloadStartedAt = Date.now()
           markProgress(0, 0)
-          const bytes = await downloadToFile(url, temp, ({ received, total }) => markProgress(received, total), {
+          const bytes = await downloadToFile(url, downloadTemp, ({ received, total }) => markProgress(received, total), {
             signal: this.abortDownload ? this.abortDownload.signal : null
           })
-          if (bytes < MIN_BINARY_BYTES) throw new Error('文件太小（' + bytes + ' 字节），镜像可能返回了错误页')
+          if (bytes < MIN_BINARY_BYTES || bytes > MAX_BINARY_BYTES) throw new Error('下载文件大小异常（' + bytes + ' 字节）')
+          if (sha256File(downloadTemp) !== asset.sha256) throw new Error('SHA-256 校验失败')
           if (this.cancelled) {
             dropTemp()
             return this.finishDownload()
           }
-          try { if (existsSync(target)) unlinkSync(target) } catch { /* ignore */ }
+          if (asset.archive) extractMacBinary(downloadTemp, temp)
+          if (!this.binaryMatchesRelease(temp, asset, true)) throw new Error('cloudflared 二进制 SHA-256 校验失败')
+          validateVersion(temp)
+          if (this.cancelled) {
+            dropTemp()
+            return this.finishDownload()
+          }
+          try { if (existsSync(target)) unlinkSync(target) } catch {}
           renameSync(temp, target)
+          try {
+            chmodSync(target, 0o700)
+          } catch (error) {
+            if (process.platform !== 'win32') throw error
+          }
+          this.binaryHashes.clear()
+          this.systemBinary = undefined
           this.downloadPercent = 100
           this.downloadBytes = bytes
           this.downloadBps = 0
@@ -346,11 +519,11 @@ export class CloudflaredTunnel {
           this.downloadError = '已试 ' + failures.length + ' 个地址都不行：' + failures.slice(-1)[0]
           this.downloadBps = 0
           dropTemp()
-          this.warn('cloudflared download failed from ' + url + ': ' + message)
+          this.warn('cloudflared download failed from ' + (host || 'address') + ': ' + message)
         }
       }
       this.downloadSource = null
-      this.downloadError = '这 ' + failures.length + ' 个地址都失败了。可以把 cloudflared.exe 手动放到 ' + target + '，或者设置 DSH_CLOUDFLARED_URL 指向你自己能连的镜像。'
+      this.downloadError = `这 ${failures.length} 个地址都失败了。请检查网络，或从 Cloudflare 官方 Release 获取 ${CLOUDFLARED_VERSION} 对应平台文件并校验 SHA-256 后放到 ${target}。`
       this.lastError = '下载 cloudflared 失败：' + failures.slice(0, 3).join('；')
       throw new Error(this.lastError)
     } finally {
@@ -386,7 +559,7 @@ export class CloudflaredTunnel {
       this.warn('cloudflared stop before delete failed: ' + (error instanceof Error ? error.message : String(error)))
     }
     const target = this.binaryPath()
-    for (const file of [target, target + '.part']) {
+    for (const file of [target, target + '.part', target + '.part.tgz']) {
       try {
         if (existsSync(file)) unlinkSync(file)
       } catch (error) {
@@ -395,6 +568,7 @@ export class CloudflaredTunnel {
       }
     }
     this.systemBinary = undefined
+    this.binaryHashes.clear()
     this.downloadBytes = 0
     this.downloadPercent = null
     this.downloadReceived = 0
@@ -414,7 +588,7 @@ export class CloudflaredTunnel {
     if (!this.hasBinary()) {
       this.state = 'error'
       this.lastError = '未安装 cloudflared'
-      throw new Error('未安装 cloudflared：在面板点「下载 cloudflared」（约 50 MB），或把 cloudflared.exe 放到 PATH / ' + this.binaryPath())
+      throw new Error(`未找到经过校验的 cloudflared ${CLOUDFLARED_VERSION}：在面板点「下载 cloudflared」，或把该版本对应平台的文件放到 PATH / ${this.binaryPath()}`)
     }
     await this.stop()
     this.port = port
@@ -424,8 +598,18 @@ export class CloudflaredTunnel {
   }
 
   spawnOnce() {
+    let exe
+    try {
+      const binary = this.resolveBinary(true)
+      if (!binary.source) throw new Error(`cloudflared SHA-256 校验失败；需要官方版本 ${CLOUDFLARED_VERSION}`)
+      exe = binary.exe
+      validateVersion(exe)
+    } catch (error) {
+      this.state = 'error'
+      this.lastError = error instanceof Error ? error.message : String(error)
+      return Promise.reject(new Error(this.lastError))
+    }
     return new Promise((resolve, reject) => {
-      const exe = this.resolveBinary().exe
       const args = ['tunnel', '--url', 'http://127.0.0.1:' + this.port, '--no-autoupdate']
       this.state = 'starting'
       this.url = null
@@ -433,7 +617,12 @@ export class CloudflaredTunnel {
       let output = ''
       let child
       try {
-        child = this.spawnImpl(exe, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+        child = this.spawnImpl(exe, args, {
+          cwd: this.stateDir,
+          env: childEnvironment(),
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'pipe']
+        })
       } catch (error) {
         this.state = 'error'
         this.lastError = error instanceof Error ? error.message : String(error)
@@ -541,7 +730,13 @@ export class CloudflaredTunnel {
       child.once('exit', () => { clearTimeout(timer); finish() })
       try {
         if (process.platform === 'win32' && pid) {
-          this.spawnImpl('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }).on('exit', () => finish())
+          const systemRoot = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows'
+          const taskkill = join(isAbsolute(systemRoot) ? systemRoot : 'C:\\Windows', 'System32', 'taskkill.exe')
+          this.spawnImpl(taskkill, ['/pid', String(pid), '/T', '/F'], {
+            env: childEnvironment(),
+            windowsHide: true,
+            stdio: 'ignore'
+          }).on('exit', () => finish())
         } else {
           child.kill('SIGTERM')
         }
