@@ -4,7 +4,7 @@ globalThis.__ModuleLoader__.load({
   factory() {
 const MOBILE_SKIN_VERSION = '2.0.0'
 
-const MOBILE_QUERY = '(max-width: 760px), (any-pointer: coarse) and (max-width: 1366px)'
+const MOBILE_QUERY = '(max-width: 640px), (any-pointer: coarse) and (max-width: 1366px)'
 const SELECTORS = {
   frame: '[class*="_frame"][style*="grid-template-columns"]',
   sidebar: '[class*="_sidebarCol"]',
@@ -233,7 +233,7 @@ function setupMobileSkin(css) {
     const gap = Math.max(0, window.innerHeight - height - top)
     keyboardOpen = focused && (gap > 90 || baselineHeight - height > 130)
     root.classList.toggle('dru-keyboard-open', keyboardOpen)
-    setAttribute(root, 'data-dru-layout', width > 760 ? 'expanded' : 'compact')
+    setAttribute(root, 'data-dru-layout', width > 640 ? 'expanded' : 'compact')
     setProperty(root, '--dru-vh', `${height}px`)
     setProperty(root, '--dru-vtop', `${top}px`)
     setProperty(root, '--dru-kb', `${gap}px`)
@@ -357,8 +357,10 @@ function setupMobileSkin(css) {
     }
     if (next) {
       const panel = parts.get(next === 'sidebar' ? 'sidebar' : 'rightbar')
-      const focusTarget = panel?.querySelector('button:not([disabled]), input:not([disabled]), [tabindex="0"]')
-      if (focusTarget instanceof HTMLElement) focusTarget.focus({ preventScroll: true })
+      if (panel instanceof HTMLElement) {
+        if (!panel.hasAttribute('tabindex')) panel.tabIndex = -1
+        panel.focus({ preventScroll: true })
+      }
     }
   }
 
@@ -378,7 +380,7 @@ function setupMobileSkin(css) {
     root.classList.toggle('dru-drawer-open', drawerOpen)
     root.classList.toggle('dru-sidebar-docked', docked)
     root.classList.toggle('dru-right-open', rightOpen)
-    launcher.hidden = !ready || width > 760
+    launcher.hidden = !ready || width > 640
     launcher.disabled = !findAction('openSidebar')
     launcher.setAttribute('aria-expanded', String(drawerOpen))
     if (!rightOpen && drawerOpen && !docked) syncOverlay('sidebar')
