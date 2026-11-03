@@ -24,6 +24,7 @@
 - 修复公共地址未配置时，直接输入地址或从其他应用打开页面被误判为 "Origin rejected" 的回归；顶层 GET 导航（`Sec-Fetch-Site: none`）现在放行，跨站请求、POST 与 WebSocket 校验不变。
 - 修复头部「更多操作」等按钮被裁剪、右栏悬浮关闭按钮遮挡宿主控件、右栏卡片被嵌套按钮撑高、菜单条目未垂直居中的问题；隐藏对手机无意义的「用访达打开」。
 - 触屏下会话行显示「…」操作菜单（隐藏静音 / 归档 / 置顶以防误触），工作区行的小按钮扩大点击区；矮视口下收紧头部标签行。
+- 边缘滑动改用 touch 事件（浏览器接管横向滚动时 pointer 事件会被取消，手势失效），起始区放宽到 40px 以避开系统返回手势。
 - Mobile Web UI 2.0 增加紧凑手机单栏与触控展开态布局；展开态保留 DSH 导航 rail，侧栏按可用宽度停靠或浮层显示，右栏适配手机与展开态。
 - 增加 VisualViewport 键盘避让、安全区、输入框滚动、原生 header action 保留、菜单 / 设置语义适配，以及 Escape / Android 返回和边缘滑动操作。
 - 将 DOM 探测与 MutationObserver 更新合并到 animation frame，并提供不含会话内容的 `window.__dshMobileSkin.getState()` 诊断信息。

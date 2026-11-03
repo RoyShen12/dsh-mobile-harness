@@ -4,6 +4,7 @@ globalThis.__ModuleLoader__.load({
   factory() {
 const MOBILE_SKIN_VERSION = '2.0.0'
 
+const EDGE_SWIPE_ZONE = 40
 const MOBILE_QUERY = '(max-width: 640px), (any-pointer: coarse) and (max-width: 1366px)'
 const SELECTORS = {
   frame: '[class*="_frame"][style*="grid-template-columns"]',
@@ -447,34 +448,39 @@ function setupMobileSkin(css) {
     if (!row || event.target.closest('[class*="_rowActions"], [aria-haspopup], input, textarea, [contenteditable="true"]')) return
     requestAnimationFrame(() => { if (!disposed) closePanels() })
   }, true)
-  listen(document, 'pointerdown', (event) => {
-    if (!event.isPrimary || event.pointerType !== 'touch' || (window.visualViewport?.scale ?? 1) > 1.05 || !(event.target instanceof Element)) return
+  const trackedTouch = (list) => gesture ? [...list].find((touch) => touch.identifier === gesture.touchId) : undefined
+  listen(document, 'touchstart', (event) => {
+    gesture = null
+    if (event.touches.length !== 1 || (window.visualViewport?.scale ?? 1) > 1.05 || !(event.target instanceof Element)) return
     if (event.target.closest('input, textarea, [contenteditable], pre, code, table, [role="dialog"], [role="menu"]')) return
-    const opening = !overlay && event.clientX <= 18
+    const touch = event.touches[0]
+    const opening = !overlay && touch.clientX <= EDGE_SWIPE_ZONE
     const closing = overlay === 'sidebar' && event.target.closest('[data-dru-part~="sidebar"]')
-    gesture = opening || closing ? { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, opening, horizontal: false } : null
+    if (opening || closing) gesture = { touchId: touch.identifier, startX: touch.clientX, startY: touch.clientY, opening: Boolean(opening), horizontal: false }
   }, { passive: true })
-  listen(document, 'pointermove', (event) => {
-    if (!gesture || event.pointerId !== gesture.pointerId) return
-    const horizontal = event.clientX - gesture.startX
-    const vertical = event.clientY - gesture.startY
+  listen(document, 'touchmove', (event) => {
+    const touch = trackedTouch(event.touches)
+    if (!touch) return
+    const horizontal = touch.clientX - gesture.startX
+    const vertical = touch.clientY - gesture.startY
     if (Math.abs(vertical) > 32 && !gesture.horizontal) { gesture = null; return }
-    if (Math.abs(horizontal) > 18 && Math.abs(horizontal) > Math.abs(vertical) * 1.6) gesture.horizontal = true
-    if (gesture.horizontal) event.preventDefault()
+    if (Math.abs(horizontal) > 14 && Math.abs(horizontal) > Math.abs(vertical) * 1.6) gesture.horizontal = true
+    if (gesture.horizontal && event.cancelable) event.preventDefault()
   }, { passive: false })
-  listen(document, 'pointerup', (event) => {
-    if (!gesture || event.pointerId !== gesture.pointerId) return
-    const horizontal = event.clientX - gesture.startX
-    const vertical = event.clientY - gesture.startY
-    if (gesture.horizontal && Math.abs(vertical) < 40 && ((gesture.opening && horizontal > 60) || (!gesture.opening && horizontal < -60))) {
+  listen(document, 'touchend', (event) => {
+    const touch = trackedTouch(event.changedTouches)
+    if (!touch) return
+    const horizontal = touch.clientX - gesture.startX
+    const vertical = touch.clientY - gesture.startY
+    if (gesture.horizontal && Math.abs(vertical) < 56 && ((gesture.opening && horizontal > 56) || (!gesture.opening && horizontal < -56))) {
       if (gesture.opening) clickAction('openSidebar')
       else closePanels()
       suppressClickUntil = Date.now() + 350
-      event.preventDefault()
+      if (event.cancelable) event.preventDefault()
     }
     gesture = null
   })
-  listen(document, 'pointercancel', () => { gesture = null })
+  listen(document, 'touchcancel', () => { gesture = null })
   sync()
 
   return {
