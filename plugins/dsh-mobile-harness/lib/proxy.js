@@ -888,9 +888,10 @@ export class GatewayProxy {
     const sessionCookie = readCookie(req, SESSION_COOKIE)
     const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(String(req.method || '').toUpperCase())
     const fetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase()
-    if (fetchSite === 'cross-site' && (upgrade || sessionCookie || unsafe)) return false
+    const documentNavigation = !upgrade && !unsafe && String(req.headers['sec-fetch-mode'] || '').toLowerCase() === 'navigate' && String(req.headers['sec-fetch-dest'] || '').toLowerCase() === 'document'
+    if (fetchSite === 'cross-site' && !documentNavigation && (upgrade || sessionCookie || unsafe)) return false
     if (upgrade && typeof origin !== 'string') return false
-    const userNavigation = !upgrade && !unsafe && fetchSite === 'none'
+    const userNavigation = !upgrade && !unsafe && (fetchSite === 'none' || documentNavigation)
     if (!userNavigation && typeof this.options.getPublicUrl?.() !== 'string' && this.options.getTunnelMode?.() && this.options.getTunnelMode() !== 'none' && origin === undefined && referer === undefined) {
       return false
     }

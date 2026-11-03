@@ -724,6 +724,22 @@ html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="composer"] d
   block-size: 36px;
 }
 
+@media (max-height: 700px) {
+  html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="tabs"],
+  html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="tabs"] [role="tablist"] {
+    min-block-size: 40px;
+  }
+
+  html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="header"] {
+    padding-block-end: 2px;
+  }
+
+  html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="header"] [data-dru-part~="tabs"] :is(button, [role="tab"]) {
+    min-block-size: 40px;
+    block-size: 40px;
+  }
+}
+
 @media (max-height: 520px) {
   html[data-dru-mobile][data-dru-skin-state="ready"].dru-keyboard-open [data-dru-part~="tabs"],
   html[data-dru-mobile][data-dru-skin-state="ready"].dru-keyboard-open [data-dru-part~="composer"] [class*="_composerStack"] section,
