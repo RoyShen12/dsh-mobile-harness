@@ -4,7 +4,7 @@ globalThis.__ModuleLoader__.load({
   factory() {
 const MOBILE_SKIN_VERSION = '2.0.0'
 
-const EDGE_SWIPE_ZONE = 40
+const EDGE_SWIPE_ZONE = 64
 const MOBILE_QUERY = '(max-width: 640px), (any-pointer: coarse) and (max-width: 1366px)'
 const SELECTORS = {
   frame: '[class*="_frame"][style*="grid-template-columns"]',

@@ -331,6 +331,7 @@ html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="settings-dia
 
 html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="settings-nav"],
 html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="settings-content"] {
+  box-sizing: border-box;
   min-inline-size: 0;
   min-block-size: 0;
   scrollbar-width: thin;
@@ -345,6 +346,7 @@ html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="settings-con
 }
 
 html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="settings-content"] > :last-child {
+  scrollbar-width: none;
   flex: 1 1 auto;
   min-block-size: 0;
   overflow: auto;
@@ -657,6 +659,25 @@ html[data-dru-mobile][data-dru-layout="compact"][data-dru-skin-state="ready"] [d
   white-space: nowrap;
 }
 
+html[data-dru-mobile][data-dru-layout="compact"][data-dru-skin-state="ready"] [data-dru-part~="settings-content"] > [class*="_header"] {
+  min-block-size: 0;
+  block-size: auto !important;
+  padding: 0 !important;
+}
+
+html[data-dru-mobile][data-dru-layout="compact"][data-dru-skin-state="ready"] [data-dru-part~="settings-content"] [class*="_close"] {
+  position: fixed;
+  z-index: 6;
+  inset-block-start: calc(env(safe-area-inset-top) + 2px);
+  inset-inline-end: max(6px, env(safe-area-inset-right));
+  min-inline-size: 44px;
+  min-block-size: 44px;
+}
+
+html[data-dru-mobile][data-dru-layout="compact"][data-dru-skin-state="ready"] [data-dru-part~="settings-content"] [class*="_options"] {
+  padding-inline: 0 !important;
+}
+
 html[data-dru-mobile][data-dru-layout="compact"][data-dru-skin-state="ready"] [data-dru-part~="settings-content"] {
   flex: 1 1 auto;
   inline-size: 100% !important;
@@ -744,6 +765,10 @@ html[data-dru-mobile][data-dru-skin-state="ready"] [data-dru-part~="composer"] d
   html[data-dru-mobile][data-dru-skin-state="ready"].dru-keyboard-open [data-dru-part~="tabs"],
   html[data-dru-mobile][data-dru-skin-state="ready"].dru-keyboard-open [data-dru-part~="composer"] [class*="_composerStack"] section,
   html[data-dru-mobile][data-dru-skin-state="ready"].dru-keyboard-open [data-dru-part~="composer"] div[class*="_dock"] {
+    display: none !important;
+  }
+
+  html[data-dru-mobile][data-dru-layout="compact"][data-dru-skin-state="ready"].dru-keyboard-open [data-dru-part~="header-actions"] {
     display: none !important;
   }
 
