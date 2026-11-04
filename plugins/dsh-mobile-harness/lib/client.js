@@ -874,7 +874,10 @@ globalThis.__ModuleLoader__.load({
       const [updateInfo, setUpdateInfo] = useState(null)
       // The gateway marks every page it forwards with x-dsh-panel-view: client, so the owner's
       // own window is the only place that sees host-only controls.
-      const hostView = status?.view !== 'client'
+      // A gateway built before the client-facing routes existed answers 403 local-only; that is
+      // still a remote page, so render the client view instead of a broken host panel.
+      const localOnly = Boolean(fetchError && /本机管理远程访问|local-only/i.test(fetchError))
+      const hostView = !localOnly && status?.view !== 'client'
 
       const load = async () => {
         try {

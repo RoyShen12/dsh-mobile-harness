@@ -132,7 +132,20 @@ export function apply(ctx) {
           if (!service) return json(idleSnapshot('远程服务尚未初始化'))
           const snapshot = service.snapshot()
           // The gateway marks every forwarded request; the owner's own window never goes through it.
-          snapshot.view = request.headers.get('x-dsh-panel-view') === 'client' ? 'client' : 'host'
+          const clientView = request.headers.get('x-dsh-panel-view') === 'client'
+          snapshot.view = clientView ? 'client' : 'host'
+          if (clientView) {
+            // A phone may read the state it renders, but the one-time QR ticket and the pairing
+            // codes only ever exist on the owner's machine: a page that cannot show them must not
+            // receive them either.
+            snapshot.qrText = null
+            snapshot.qr = null
+            snapshot.qrTicketExpiresAt = null
+            snapshot.pending = (snapshot.pending || []).map((entry) => ({ ...entry, pairCode: '' }))
+            // Local paths and the owner's diagnostic text stay on this machine as well.
+            snapshot.filePoolDir = null
+            snapshot.lastError = null
+          }
           // Which device is asking, and the layout it picked for itself (null = default).
           snapshot.deviceId = readDeviceCookie(request)
           snapshot.deviceUiMode = service.deviceUiMode(snapshot.deviceId)

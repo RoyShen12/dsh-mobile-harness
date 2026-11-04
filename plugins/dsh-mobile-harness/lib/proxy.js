@@ -1740,10 +1740,10 @@ export class GatewayProxy {
         return
       }
       url.pathname = path
-      if (isPluginManagementPath(path)) {
-        this.sendJson(res, 403, { ok: false, code: 'local-only' })
-        return
-      }
+      // Remote pages are allowed to read the plugin's client-facing routes (status, file pool,
+      // their own UI mode, self-check) because the panel hides host-only controls when the
+      // upstream stamps the request; host-only management POSTs are refused further down by
+      // HOST_ONLY_API, which is the gate that must stay in front of state-changing calls.
       if (!this.requestOriginAllowed(req)) {
         this.serveText(res, 403, 'Origin rejected.\n')
         return
