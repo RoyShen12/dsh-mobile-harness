@@ -2,7 +2,7 @@ globalThis.__ModuleLoader__.load({
   id: 'dsh-mobile-harness',
   chunk: 'client.mobile-skin.js',
   factory() {
-const MOBILE_SKIN_VERSION = '2.0.0'
+const MOBILE_SKIN_VERSION = '2.1.0'
 
 const EDGE_SWIPE_ZONE = 64
 const MOBILE_QUERY = '(max-width: 640px), (any-pointer: coarse) and (max-width: 1366px)'
@@ -48,13 +48,103 @@ function isComposer(target) {
   return target instanceof Element && Boolean(target.closest('[role="textbox"][contenteditable="true"]'))
 }
 
+/** The layout the gateway stamped on <html>: 'phone' | 'tablet' | null (null = not a remote page). */
+function forcedUiMode() {
+  return document.documentElement.getAttribute('data-dru-ui')
+}
+
+/** True when the server fell back to the fixed desktop canvas ('compat'): the skin must stay off. */
+function compatCanvas() {
+  const content = document.querySelector('meta[name="viewport"]')?.getAttribute('content') ?? ''
+  const width = Number(content.match(/width=(\d+)/)?.[1] ?? 0)
+  return width > 640
+}
+
+/**
+ * The rail's function list (插件 / 自动化任务 / 生活 …) eats the top half of a phone drawer and
+ * leaves the workspace list cramped. A one-line header folds it away so the sessions get the
+ * height instead. Only offered where the rail is actually expanded, and only on narrow layouts,
+ * so the desktop panel keeps its normal sidebar.
+ */
+function installNavFold() {
+  const KEY = 'dru-nav-folded'
+  const styleId = 'dru-nav-style'
+  if (!document.getElementById(styleId)) {
+    const style = document.createElement('style')
+    style.id = styleId
+    style.textContent = [
+      '.dru-nav-folded{display:none!important}',
+      '.dru-nav-toggle{display:flex;align-items:center;justify-content:space-between;width:100%;margin:2px 0 4px;padding:5px 8px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-tertiary,#8a93a3);font-size:11px;line-height:18px;cursor:pointer;font-family:inherit;text-align:left}',
+      '.dru-nav-toggle:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+      '.dru-nav-toggle[hidden]{display:none}'
+    ].join('')
+    document.head.appendChild(style)
+  }
+  let folded = false
+  try { folded = window.localStorage.getItem(KEY) === '1' } catch {}
+  const bar = document.createElement('button')
+  bar.type = 'button'
+  bar.className = 'dru-nav-toggle'
+  const label = document.createElement('span')
+  const caret = document.createElement('span')
+  caret.setAttribute('aria-hidden', 'true')
+  bar.appendChild(label)
+  bar.appendChild(caret)
+  const paint = () => {
+    label.textContent = folded ? '功能入口（已收起）' : '功能入口'
+    caret.textContent = folded ? '\u25be' : '\u25b4'
+    bar.title = folded ? '展开插件与工具入口' : '收起插件与工具入口'
+  }
+  const sync = () => {
+    const nav = document.querySelector('nav[class*="_panelList"]')
+    const rail = document.querySelector('[class*="_sidebarCol"]')
+    const narrow = window.innerWidth <= 900 || document.documentElement.hasAttribute('data-dru-mobile')
+    if (!nav || !rail || !narrow) {
+      bar.hidden = true
+      nav?.classList.remove('dru-nav-folded')
+      return
+    }
+    const wide = rail.getBoundingClientRect().width >= 200
+    bar.hidden = !wide
+    if (!wide) {
+      nav.classList.remove('dru-nav-folded')
+      return
+    }
+    if (nav.previousElementSibling !== bar && nav.parentElement) nav.parentElement.insertBefore(bar, nav)
+    nav.classList.toggle('dru-nav-folded', folded)
+  }
+  bar.addEventListener('click', () => {
+    folded = !folded
+    try { window.localStorage.setItem(KEY, folded ? '1' : '0') } catch {}
+    paint()
+    sync()
+  })
+  paint()
+  sync()
+  const timer = window.setInterval(sync, 1200)
+  return () => {
+    window.clearInterval(timer)
+    bar.remove()
+    document.querySelector('nav[class*="_panelList"]')?.classList.remove('dru-nav-folded')
+  }
+}
+
 function installMobileSkin(css) {
   if (typeof css !== 'string' || !css) throw new Error('Mobile stylesheet unavailable')
   const query = window.matchMedia(MOBILE_QUERY)
   let activeSkin = null
+  let navFold = null
   const sync = () => {
-    if (query.matches && !activeSkin) activeSkin = setupMobileSkin(css)
-    else if (!query.matches && activeSkin) {
+    // The gateway decides the layout per device and stamps it on <html>, so an explicit
+    // phone/tablet choice wins over the CSS width; 'compat' keeps the fixed desktop canvas.
+    const forced = forcedUiMode()
+    const want = forced ? forced !== 'compat' : !compatCanvas() && query.matches
+    if (want && !activeSkin) {
+      activeSkin = setupMobileSkin(css)
+      navFold = installNavFold()
+    } else if (!want && activeSkin) {
+      navFold?.()
+      navFold = null
       activeSkin.dispose()
       activeSkin = null
     }
@@ -69,6 +159,8 @@ function installMobileSkin(css) {
   sync()
   return () => {
     query.removeEventListener('change', sync)
+    navFold?.()
+    navFold = null
     activeSkin?.dispose()
     activeSkin = null
     if (globalThis.__dshMobileSkin === diagnostics) delete globalThis.__dshMobileSkin
