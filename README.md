@@ -14,7 +14,7 @@
 
 ![面板：一个开关 + 三张卡](assets/panel.png)
 
-> 电脑端面板：一个总开关——连接 / 网络入口 / 设备准入。
+> 电脑端面板：一个总开关，下面是顶部分栏——连接与设备 / 文件传输 / 界面，最右侧显示版本与更新提示。
 
 **下载**：npm dsh-mobile-harness
 
@@ -101,7 +101,7 @@ profile 在 `~/.dsh/profiles/<名字>`（Windows 是 `%USERPROFILE%\.dsh\profile
 ```json
 {
   "dependencies": {
-    "dsh-mobile-harness": "^1.0.2"
+    "dsh-mobile-harness": "^1.2.0"
   },
   "dsh": { "profile": { "bundles": ["...", "dsh-mobile-harness"] } }
 }
@@ -111,7 +111,7 @@ profile 在 `~/.dsh/profiles/<名字>`（Windows 是 `%USERPROFILE%\.dsh\profile
 
 **方式 D：离线 tgz**
 
-从 [插件 1.0.2 release](https://github.com/afeack/dsh-mobile-harness/releases/tag/plugin-v1.0.2) 下 `dsh-mobile-harness-1.0.2.tgz`（内容和 npm 包一致），解开到 `<profile>/node_modules/dsh-mobile-harness/`，再把 `dsh-mobile-harness` 写进 `dsh.profile.bundles`；或者 `pnpm add file:./dsh-mobile-harness-1.0.2.tgz`。内网 / 连不上 npm 时用这条。
+从 [插件 1.2.0 release](https://github.com/afeack/dsh-mobile-harness/releases/tag/plugin-v1.2.0) 下 `dsh-mobile-harness-1.2.0.tgz`（内容和 npm 包一致），解开到 `<profile>/node_modules/dsh-mobile-harness/`，再把 `dsh-mobile-harness` 写进 `dsh.profile.bundles`；或者 `pnpm add file:./dsh-mobile-harness-1.2.0.tgz`。内网 / 连不上 npm 时用这条。
 
 ### 2. 重启 DSH
 
@@ -285,4 +285,4 @@ node scripts/install-plugin.mjs --profile desktop
 cd ~/.dsh/profiles/desktop && pnpm install
 ```
 
-Downloads are split by component: plugin tarball in [plugin-v1.0.2](https://github.com/afeack/dsh-mobile-harness/releases/tag/plugin-v1.0.2), APK in [v1.0.0](https://github.com/afeack/dsh-mobile-harness/releases/tag/v1.0.0). License: MIT. See [SECURITY.md](SECURITY.md) before exposing the gateway to the public internet.
+Downloads are split by component: plugin tarball in [plugin-v1.2.0](https://github.com/afeack/dsh-mobile-harness/releases/tag/plugin-v1.2.0), APK in [v1.0.0](https://github.com/afeack/dsh-mobile-harness/releases/tag/v1.0.0). License: MIT. See [SECURITY.md](SECURITY.md) before exposing the gateway to the public internet.
