@@ -1718,8 +1718,10 @@ export class GatewayProxy {
     // claim another device id by sending the header itself.
     delete headers['x-dsh-device-id']
     // The device cookie can be cleared (private mode, a fresh browser); the session cookie still
-    // names the device, so fall back to it rather than losing the per-device choices.
-    const forwardedDevice = readCookie(req, DEVICE_COOKIE)
+    // names the device, so fall back to it rather than losing the per-device choices. The cookie
+    // value is signed (<id>.<issuedAt>.<signature>), so forward the verified id, never the raw
+    // value: the upstream routes match it against the device registry.
+    const forwardedDevice = this.readDeviceId(req)
       || this.resolveSession(readCookie(req, SESSION_COOKIE))?.deviceId
     if (typeof forwardedDevice === 'string' && forwardedDevice.length >= 6) {
       headers['x-dsh-device-id'] = forwardedDevice
