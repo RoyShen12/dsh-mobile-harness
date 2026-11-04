@@ -97,7 +97,13 @@ export function apply(ctx) {
   const register = (route) => ctx.connection.fetch.register({
     ...route,
     fetch: async (request) => {
-      if (request.headers.get('x-dsh-mobile-remote')) return json({ error: 'local-management-only' }, 403)
+      // The gateway marks every forwarded request. The status route is the one management route a
+      // remote phone must read: it carries view=client so the panel hides host-only controls, and
+      // it is redacted below. Everything else here is state-changing and stays host-only; the
+      // gateway's HOST_ONLY_API list refuses the same POSTs a second time.
+      if (request.headers.get('x-dsh-mobile-remote') && route.path !== STATUS_PATH) {
+        return json({ error: 'local-management-only' }, 403)
+      }
       return route.fetch(request)
     }
   })
@@ -334,10 +340,13 @@ export function apply(ctx) {
         path: FILES_PATH,
         methods: ['GET'],
         requestBody: 'buffered',
-        fetch: async () => {
+        fetch: async (request) => {
           if (!service) return json({ error: '远程服务尚未初始化' }, 503)
           try {
-            return json(await service.listFiles())
+            const listing = await service.listFiles()
+            // A phone may transfer files, not learn where the pool lives on this disk.
+            if (request.headers.get('x-dsh-panel-view') === 'client') delete listing.dir
+            return json(listing)
           } catch (error) {
             return json({ error: error instanceof Error ? error.message : String(error) }, 500)
           }

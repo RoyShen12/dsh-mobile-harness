@@ -372,6 +372,7 @@ globalThis.__ModuleLoader__.load({
 .dru-qr-empty{background:transparent;border:1px dashed rgba(128,128,128,.42);flex-direction:column;gap:10px;color:var(--dsw-alias-label-tertiary,#8a93a3)}
 .dru-qr-ghost{width:56px;height:56px;opacity:.3}
 .dru-qr-empty-text{font-size:11.5px;line-height:1.6;text-align:center;padding:0 6px}
+html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
 @media (max-width:760px){.dru-page{padding:24px 18px 48px}.dru-body{flex-direction:column}.dru-left{width:100%}.dru-body{flex-direction:column;gap:14px}.dru-body>.dru-left{width:100%}.dru-qr{width:220px;height:220px;margin:0 auto}.dru-qr-hint{max-width:220px;margin:8px auto 0}.dru-field{flex-direction:column;gap:6px}.dru-field-label{width:auto;padding-top:0}.dru-hero{flex-direction:column;gap:12px}.dru-card{padding:14px 14px 16px}}
 `
 

@@ -536,6 +536,12 @@ function setupMobileSkin(css) {
       return
     }
     if (!(event.target instanceof Element) || overlay !== 'sidebar') return
+    // Panel entries (插件 / 远程 / 自动化任务 …) replace the main view: on a phone the drawer has
+    // to get out of the way just like it does after a session switch.
+    if (event.target.closest('nav[class*="_panelList"] button, nav[class*="_panelList"] [role="button"]')) {
+      requestAnimationFrame(() => { if (!disposed) closePanels() })
+      return
+    }
     const row = event.target.closest('[role="treeitem"][data-row-key^="session:"], [class*="_sessionRow"]')
     if (!row || event.target.closest('[class*="_rowActions"], [aria-haspopup], input, textarea, [contenteditable="true"]')) return
     requestAnimationFrame(() => { if (!disposed) closePanels() })
