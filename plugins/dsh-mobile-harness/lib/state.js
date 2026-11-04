@@ -29,10 +29,16 @@ function defaultState() {
     version: 1,
     /** whether the switch was on when the Host last shut down */
     enabled: false,
-    /** 'tailscale' | 'external' | 'none' */
+    /** 'tailscale' | 'external' | 'quick' | 'lan' | 'none' */
     tunnel: 'tailscale',
     /** public URL of an external relay (e.g. https://frp-cat.com:12345/), shown in the panel */
     externalUrl: null,
+    /** lan entry: the adapter address to advertise (null = first by the preference order) */
+    lanAddress: null,
+    /** viewport served to phones/tablets: 'auto' | 'phone' | 'tablet' | 'compat' */
+    uiMode: 'auto',
+    /** absolute folder for the shared file pool (null = <state dir>/files) */
+    filePoolDir: null,
     /** display password for the remote login page (plain text by design: the UI shows it) */
     password: null,
     /** when true the gateway requires the access password (verified through POST /__verify) */
@@ -56,7 +62,7 @@ function defaultState() {
   }
 }
 
-const TUNNEL_MODES = new Set(['tailscale', 'external', 'quick', 'none'])
+const TUNNEL_MODES = new Set(['tailscale', 'external', 'quick', 'lan', 'none'])
 
 /** @returns {object} loaded state, repaired with defaults */
 export function loadState() {
@@ -71,6 +77,9 @@ export function loadState() {
       version: 1,
       tunnel: TUNNEL_MODES.has(parsed.tunnel) ? parsed.tunnel : 'tailscale',
       externalUrl: typeof parsed.externalUrl === 'string' && parsed.externalUrl.length > 0 ? parsed.externalUrl : null,
+      lanAddress: typeof parsed.lanAddress === 'string' && parsed.lanAddress.length > 0 ? parsed.lanAddress : null,
+      uiMode: ['auto', 'phone', 'tablet', 'compat'].includes(parsed.uiMode) ? parsed.uiMode : 'auto',
+      filePoolDir: typeof parsed.filePoolDir === 'string' && parsed.filePoolDir.trim().length > 0 ? parsed.filePoolDir.trim() : null,
       passwordEnabled: parsed.passwordEnabled !== false,
       sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
       blacklist: Array.isArray(parsed.blacklist) ? parsed.blacklist : []

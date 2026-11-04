@@ -1,8 +1,8 @@
 {
   "name": "dsh-mobile-harness",
-  "version": "1.0.3",
+  "version": "1.2.0",
   "type": "module",
-  "description": "DSH Mobile Harness — bring your desktop DeepSeek Harness session to your phone: native Android app, QR pairing, four network entries, device admission control.",
+  "description": "DSH Mobile Harness — bring your desktop DeepSeek Harness session to your phone: native Android app, QR pairing, LAN / virtual-network entry, device admission control.",
   "license": "MIT",
   "author": "afeack (https://github.com/afeack)",
   "repository": {
@@ -20,6 +20,8 @@
     "remote-access",
     "cloudflare-tunnel",
     "tailscale",
+    "lan",
+    "zerotier",
     "android",
     "remote-control",
     "device-admission"
@@ -39,6 +41,7 @@
   },
   "files": [
     "lib/**/*",
+    "tools/**/*",
     "cordis.patch.yml",
     "icon.svg",
     "README.md"

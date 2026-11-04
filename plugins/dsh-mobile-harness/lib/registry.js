@@ -24,6 +24,14 @@ export const PAIRING_CODE_DIGITS = 6
 
 const VALID_STATES = new Set(['pending', 'trusted', 'revoked', 'blocked'])
 
+/** Viewports a single phone may pick; null means "follow the global default". */
+const UI_MODES = new Set(['auto', 'phone', 'tablet', 'compat'])
+
+/** @returns {string|null} a valid per-device viewport mode, or null */
+export function normalizeUiMode(value) {
+  return UI_MODES.has(value) ? value : null
+}
+
 /** 0 means "no limit"; otherwise clamp to 1-10 so the panel cannot brick itself. */
 export function clampMaxOnlineDevices(value) {
   const raw = Number(value)
@@ -85,6 +93,8 @@ export class DeviceRegistry {
       clientVersion: typeof raw.clientVersion === 'string' ? raw.clientVersion.slice(0, 32) : '',
       userAgent: typeof raw.userAgent === 'string' ? raw.userAgent.slice(0, 240) : '',
       state,
+      // Per-device viewport override, so two phones can run different layouts at once.
+      uiMode: normalizeUiMode(raw.uiMode),
       firstSeen: Number(raw.firstSeen) || now,
       lastSeen: Number(raw.lastSeen) || now,
       lastLoginAt: Number(raw.lastLoginAt) || null,

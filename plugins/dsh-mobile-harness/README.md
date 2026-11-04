@@ -1,6 +1,6 @@
 # DSH Mobile Harness
 
-DeepSeek Harness 插件：把「远程访问」做成 DSH 里的一个开关。开关下面是一块小面板——网关、密码、一次性二维码、四条网络入口、逐台设备准入。
+DeepSeek Harness 插件：把「远程访问」做成 DSH 里的一个开关。开关下面是一块小面板——网关、密码、一次性二维码、五个网络入口、逐台设备准入；连不上时还有一键自检。
 
 **手机端不需要装 App。** 任何浏览器扫一下面板上的二维码、输一次密码，就能接着用电脑上的同一个会话；配套的 Android App（`app/`）是可选的，只多出相机扫码、密码记忆、下载落盘。
 
@@ -24,14 +24,34 @@ node scripts/install-plugin.mjs --profile desktop   # 写依赖 + bundle 条目�
 2. 选网络入口（推荐**外部隧道**或 **Cloudflare**，见下）。
 3. 手机扫码：等待页显示 6 位配对码 → 电脑面板「设备准入」核对同一串 → 点「允许」→「数字一致，允许」。
 
-## 四条网络入口
+## 五个网络入口
 
 | 入口 | 推荐度 | 说明 |
 | --- | --- | --- |
-| **SakuraFrp / 任意外部隧道** | ✅ 推荐 | 填外网地址（如 `https://frp-cat.com:12345/`）；「自动检测」会读 SakuraFrp 运行日志。地址稳定 |
+| **局域网 / 虚拟组网** | ✅ **推荐（同网段）** | 手机和电脑同一个 Wi-Fi；或两端都连着皎月连 / ZeroTier / Radmin 这类虚拟组网。网关监听所有网卡，面板列出本机每个 IPv4，**点「用这个」可以把二维码钉在指定的那张网卡上**（例如皎月连的 `10.6.22.1`）；不出公网，延迟最低 |
+| **SakuraFrp / 任意外部隧道** | ✅ 推荐（跨网） | 填外网地址（如 `https://frp-cat.com:12345/`）；「自动检测」会读 SakuraFrp 运行日志，并核对隧道本地端口和网关端口。地址稳定 |
 | **Cloudflare 快速隧道** | ✅ 推荐（零准备） | 免账号：插件自己下 `cloudflared`（约 50 MB，带进度条）并建 quick tunnel；地址每次重启都变 |
-| **仅本机** | ✅ 局域网内 | 手机和电脑同一个 Wi-Fi，最安全 |
 | **Tailscale** | ⚠️ 不推荐 | 能穿 NAT，但常走 DERP 中继，延迟明显偏高；只在内网直连时考虑 |
+| **仅本机** | 🛠 调试用 | 只监听 `127.0.0.1`，手机连不上；本机排查时用 |
+
+## 手机连不上？先自检
+
+面板「网络入口」下面有个 **一键自检** 按钮：它按手机请求经过的顺序逐段检查（总开关 → 网关 → DSH 本体 → 隧道 → 外网地址 → 设备准入），每一项给出绿 / 黄 / 红，红色那行就是断点，下面灰字直接写改法。
+
+命令行也能跑（只读，不绑端口、不改状态，DSH 没启动也能用）：
+
+```bash
+node tools/diagnose.mjs          # 彩色报告
+node tools/diagnose.mjs --json   # 机器可读
+```
+
+典型输出：
+
+```
+ ✓ 总开关：已打开
+ ✗ 隧道本地端口：隧道转发到 64701，但系统禁止绑定这个端口（EACCES）；网关在 64900
+     → 把 SakuraFrp 里这条隧道的「本地端口」改成 64900，保存即恢复，不用重启 DSH
+```
 
 ## 设备准入
 
@@ -43,7 +63,7 @@ node scripts/install-plugin.mjs --profile desktop   # 写依赖 + bundle 条目�
 ## 面板
 
 1. **连接** —— 二维码（一次性票据，10 分钟、扫一次失效，默认模糊点开显示）+ 状态 + 在线统计（设备 / 页面）+ 网址 + 密码（显示 / 复制 / 重置）+ 验证开关。
-2. **网络入口** —— 四选一 + 外网地址（保存 / 自动检测）或 Cloudflare 隧道行（进度条 + 速度 + 剩余时间）。
+2. **网络入口** —— 五选一 + 外网地址（保存 / 自动检测）或 Cloudflare 隧道行（进度条 + 速度 + 剩余时间）。
 3. **设备准入** —— 首次连接（需同意 / 免同意）、在线上限、待同意卡片（放大配对码 + 二次确认）、设备行（移除 / 拉黑 / 解除）。
 
 开关、密码、设备信任、入口选择全部持久化，DSH 重启后自动恢复。
@@ -52,7 +72,8 @@ node scripts/install-plugin.mjs --profile desktop   # 写依赖 + bundle 条目�
 
 | 文件 | 作用 |
 |---|---|
-| `lib/index.js` | 宿主入口：生命周期 + 鉴权路由（status / toggle / password / external / devices / cloudflared） |
+| `lib/index.js` | 宿主入口：生命周期 + 鉴权路由（status / toggle / password / external / devices / cloudflared / selfcheck） |
+| `tools/diagnose.mjs` | 命令行自检：读状态文件 + 探端口 + 比对 SakuraFrp 隧道端口，只读 |
 | `lib/service.js` | 状态机：启停、持久化、状态快照、密码轮换 |
 | `lib/proxy.js` | 本机网关：`/__verify` + 配对码、Cookie 注入、Host/Origin 改写、WS 中继 |
 | `lib/tailscale.js` | `tailscale status` / `serve` 封装 |

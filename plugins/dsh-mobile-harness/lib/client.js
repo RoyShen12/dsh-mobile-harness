@@ -56,6 +56,24 @@ globalThis.__ModuleLoader__.load({
       return (value / 1073741824).toFixed(2) + ' GB'
     }
 
+    /** 1762312345678 -> "11-04 11:12" (todays only show the clock, yesterdays gain the date). */
+    function formatFileDate(ms) {
+      const value = new Date(Number(ms))
+      if (!Number.isFinite(value.getTime())) return '—'
+      const pad = (n) => String(n).padStart(2, '0')
+      const clock = pad(value.getHours()) + ':' + pad(value.getMinutes())
+      const today = new Date()
+      if (value.toDateString() === today.toDateString()) return clock
+      return pad(value.getMonth() + 1) + '-' + pad(value.getDate()) + ' ' + clock
+    }
+
+    /** "holiday.mp4" -> "MP4"; the extension badge in the file row. */
+    function fileExt(name) {
+      const dot = String(name || '').lastIndexOf('.')
+      if (dot === -1 || dot === String(name).length - 1) return 'FILE'
+      return String(name).slice(dot + 1).toUpperCase().slice(0, 4)
+    }
+
     /** 480000 -> "469 KB/s" */
     function formatSpeed(bps) {
       const value = Number(bps)
@@ -83,6 +101,17 @@ globalThis.__ModuleLoader__.load({
     const RESET_PATH = '/api/dsh-mobile-harness.reset'
     const DEVICES_PATH = '/api/dsh-mobile-harness.devices'
     const CLOUDFLARED_PATH = '/api/dsh-mobile-harness.cloudflared'
+    const SELFCHECK_PATH = '/api/dsh-mobile-harness.selfcheck'
+    const LAN_PATH = '/api/dsh-mobile-harness.lan'
+    const UI_PATH = '/api/dsh-mobile-harness.ui'
+    const UPDATE_PATH = '/api/dsh-mobile-harness.update'
+    const FILE_POOL_PATH = '/api/dsh-mobile-harness.pool'
+    const FILE_POOL_PICK_PATH = '/api/dsh-mobile-harness.poolpick'
+    // File pool owned by this plugin alone (lib/files.js): no other plugin has to be installed.
+    const FILES_PATH = '/api/dsh-mobile-harness.files'
+    const FILE_UPLOAD_PATH = '/api/dsh-mobile-harness.upload'
+    const FILE_DOWNLOAD_PATH = '/api/dsh-mobile-harness.file'
+    const FILE_DELETE_PATH = '/api/dsh-mobile-harness.delete'
 
     const CLS = {
       page: 'dru-page',
@@ -92,6 +121,15 @@ globalThis.__ModuleLoader__.load({
       switchButton: 'dru-switch',
       switchOn: 'dru-switch-on',
       switchThumb: 'dru-switch-thumb',
+      lanBox: 'dru-lan-box',
+      lanCard: 'dru-lan-card',
+      lanCardOn: 'dru-lan-card-on',
+      lanMain: 'dru-lan-main',
+      lanAddr: 'dru-lan-addr',
+      lanNic: 'dru-lan-nic',
+      lanSwitch: 'dru-lan-switch',
+      lanSwitchOn: 'dru-lan-switch-on',
+      lanThumb: 'dru-lan-thumb',
       screen: 'dru-screen',
       screenTitle: 'dru-screen-title',
       body: 'dru-body',
@@ -112,7 +150,6 @@ globalThis.__ModuleLoader__.load({
       rowLabel: 'dru-row-label',
       rowValue: 'dru-row-value',
       mono: 'dru-mono',
-      muted: 'dru-muted',
       dot: 'dru-dot',
       dotOn: 'dru-dot-on',
       dotError: 'dru-dot-error',
@@ -159,7 +196,31 @@ globalThis.__ModuleLoader__.load({
       barNote: 'dru-bar-note',
       safety: 'dru-safety',
       footer: 'dru-footer',
-      spinner: 'dru-spinner'
+      tabBar: 'dru-tab-bar',
+      tabBtn: 'dru-tab-btn',
+      tabBtnOn: 'dru-tab-btn-on',
+      cardHidden: 'dru-card-hidden',
+      tabMeta: 'dru-tab-meta',
+      tabVersion: 'dru-tab-version',
+      tabUpdate: 'dru-tab-update',
+      uploadBox: 'dru-upload',
+      uploadHot: 'dru-upload-hot',
+      uploadTitle: 'dru-upload-title',
+      uploadHint: 'dru-upload-hint',
+      uploadInput: 'dru-upload-input',
+      queueRow: 'dru-queue-row',
+      progress: 'dru-progress',
+      progressBar: 'dru-progress-bar',
+      fileList: 'dru-file-list',
+      fileRow: 'dru-file-row',
+      poolRow: 'dru-pool-row',
+      fileExt: 'dru-file-ext',
+      fileMeta: 'dru-file-meta',
+      fileName: 'dru-file-name',
+      fileSub: 'dru-file-sub',
+      fileEmpty: 'dru-file-empty',
+      portRow: 'dru-port-row',
+      portChip: 'dru-port-chip',
     }
 
     const CSS = `
@@ -227,6 +288,38 @@ globalThis.__ModuleLoader__.load({
 .dru-hero{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;max-width:860px}
 .dru-hero-title{display:flex;align-items:center;gap:10px}
 .dru-card{box-sizing:border-box;max-width:860px;margin-top:16px;padding:16px 18px 18px;border:1px solid var(--dsw-alias-line-1,rgba(128,128,128,.24));border-radius:14px;background:var(--dsw-alias-bg-layer-2)}
+/* Top tab bar, in the same shape as the memory panel: text tabs over a hairline, active one underlined. */
+.dru-tab-bar{display:flex;gap:2px;max-width:860px;margin:2px 0 2px;border-bottom:1px solid var(--dsw-alias-line-1,rgba(128,128,128,.2))}
+.dru-tab-btn{position:relative;appearance:none;border:0;background:none;padding:9px 14px 11px;font:inherit;font-size:13px;line-height:20px;font-weight:500;color:var(--dsw-alias-label-secondary);cursor:pointer;border-radius:8px 8px 0 0;transition:color .12s ease,background .12s ease}
+.dru-tab-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.1))}
+.dru-tab-btn-on{color:var(--dsw-alias-label-primary);font-weight:600}
+.dru-tab-btn-on::after{content:'';position:absolute;left:14px;right:14px;bottom:-1px;height:2px;border-radius:2px;background:var(--dsw-alias-brand-primary,#4d6bfe)}
+.dru-tab-meta{display:flex;align-items:center;gap:8px;margin-left:auto;padding-bottom:4px}
+.dru-tab-version{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;white-space:nowrap}
+.dru-tab-update{margin:0;padding:1px 8px;border:1px solid #f5b800;border-radius:999px;background:#fff3c4;color:#8a5b00;font-size:11px;line-height:16px;cursor:pointer;white-space:nowrap}
+.dru-tab-update:hover{background:#ffe27a;color:#6b4600}
+.dru-card-hidden{display:none!important}
+.dru-upload{position:relative;overflow:hidden;display:flex;flex-direction:column;gap:4px;padding:22px 18px;border:1.5px dashed var(--dsw-alias-line-1,rgba(128,128,128,.35));border-radius:12px;background:rgba(128,128,128,.04);text-align:center;cursor:pointer;transition:border-color .12s,background .12s}
+.dru-upload:hover{border-color:var(--dsw-alias-brand-primary,#4d6bfe);background:rgba(77,107,254,.06)}
+.dru-upload-hot{border-color:var(--dsw-alias-brand-primary,#4d6bfe);background:rgba(77,107,254,.1)}
+.dru-upload-title{font-size:14px;font-weight:600;line-height:20px}
+.dru-upload-hint{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
+.dru-upload-input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;font-size:0}
+.dru-queue-row{display:grid;grid-template-columns:1fr auto;gap:2px 10px;margin-top:10px;font-size:12px}
+.dru-progress{grid-column:1 / -1;height:4px;border-radius:2px;background:rgba(128,128,128,.16);overflow:hidden}
+.dru-progress-bar{height:100%;background:var(--dsw-alias-brand-primary,#4d6bfe);transition:width .2s}
+.dru-file-list{list-style:none;margin:12px 0 0;padding:0}
+.dru-pool-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 6px}
+.dru-pool-row .dru-input{flex:1;min-width:0}
+.dru-file-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--dsw-alias-line-1,rgba(128,128,128,.16))}
+.dru-file-ext{flex:none;width:40px;text-align:center;font-size:10px;font-weight:700;letter-spacing:.03em;padding:6px 0;border-radius:6px;background:rgba(128,128,128,.12);color:var(--dsw-alias-label-secondary)}
+.dru-file-meta{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.dru-file-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+.dru-file-sub{font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
+.dru-file-empty{margin:14px 0 0;font-size:13px;color:var(--dsw-alias-label-secondary)}
+.dru-port-row{flex-basis:100%;display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 0}
+.dru-port-chip{display:inline-flex;align-items:center;padding:1px 9px;border-radius:999px;border:1px solid #bfd4ff;background:#eef4ff;color:#1d4ed8;font:600 13px/20px ui-monospace,SFMono-Regular,Menlo,monospace;cursor:pointer;user-select:all}
+.dru-port-chip:hover{background:#dfeaff}
 .dru-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:14px}
 .dru-card-title{margin:0;font-size:14px;line-height:22px;font-weight:600}
 .dru-card-desc{margin:3px 0 0;font-size:11.5px;line-height:17px;color:var(--dsw-alias-label-tertiary,#8a93a3)}
@@ -237,6 +330,18 @@ globalThis.__ModuleLoader__.load({
 .dru-field-main{flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .dru-field-tip{flex-basis:100%;margin:0;font-size:11.5px;line-height:18px;color:var(--dsw-alias-label-tertiary,#8a93a3)}
 .dru-card-note{margin:0;font-size:11.5px;line-height:1.8;color:var(--dsw-alias-label-tertiary,#8a93a3)}
+/* LAN picker: one frame, one card per adapter, a switch at the end of every card. */
+.dru-lan-box{display:flex;flex-direction:column;gap:8px;width:100%;padding:8px;border:1px solid var(--dsw-alias-line-1,rgba(128,128,128,.28));border-radius:12px;background:var(--dsw-alias-bg-layer-1)}
+.dru-lan-card{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--dsw-alias-line-1,rgba(128,128,128,.24));border-radius:10px;background:var(--dsw-alias-bg-layer-2);transition:border-color .15s,background .15s}
+.dru-lan-card-on{border-color:color-mix(in srgb,var(--dsw-alias-accent,#4c8dff) 55%,transparent);background:color-mix(in srgb,var(--dsw-alias-accent,#4c8dff) 10%,var(--dsw-alias-bg-layer-2))}
+.dru-lan-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.dru-lan-addr{font-size:13px;line-height:20px}
+.dru-lan-nic{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#8a93a3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dru-lan-switch{position:relative;flex:none;width:40px;height:24px;margin:0;border:0;border-radius:999px;background:var(--dsw-alias-interactive-bg-hover);cursor:pointer;transition:background .18s}
+.dru-lan-switch:disabled{cursor:progress;opacity:.7}
+.dru-lan-switch-on{background:var(--dsw-alias-accent,#4c8dff)}
+.dru-lan-thumb{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.35);transition:transform .18s}
+.dru-lan-switch-on .dru-lan-thumb{transform:translateX(16px)}
 .dru-value{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
 .dru-seg{display:flex;flex-wrap:wrap;gap:2px;padding:2px;border:1px solid var(--dsw-alias-line-1,rgba(128,128,128,.28));border-radius:9px;background:var(--dsw-alias-bg-layer-1)}
 .dru-seg-btn{white-space:nowrap;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:20px;padding:4px 11px;border-radius:7px;cursor:pointer;font-family:inherit;transition:background .15s,color .15s}
@@ -425,10 +530,10 @@ globalThis.__ModuleLoader__.load({
     }
 
     /** A titled block: the panel is a stack of these, so every area starts at the same edge. */
-    function Card({ title, desc, aside, children }) {
+    function Card({ title, desc, aside, hidden, children }) {
       return h(
         'section',
-        { className: CLS.card },
+        { className: CLS.card + (hidden ? ' ' + CLS.cardHidden : ''), hidden: Boolean(hidden) },
         h(
           'div',
           { className: CLS.cardHead },
@@ -441,6 +546,271 @@ globalThis.__ModuleLoader__.load({
           aside ? h('div', { className: CLS.cardAside }, aside) : null
         ),
         children
+      )
+    }
+
+    /**
+     * 文件传输: this plugin's own pool (lib/files.js), reachable from the phone.
+     * The picker is a <label> wrapping the real <input type=file>: a JS .click() on a
+     * display:none input is refused by some WebViews (this was the phone upload bug).
+     */
+    function FilesPanel({ hidden, hostView }) {
+      const [files, setFiles] = useState(null)
+      const [limitMb, setLimitMb] = useState(null)
+      const [poolDir, setPoolDir] = useState('')
+      const [draft, setDraft] = useState(null)
+      const [custom, setCustom] = useState(false)
+      const [savingPool, setSavingPool] = useState(false)
+      const [picking, setPicking] = useState(false)
+      const [error, setError] = useState(null)
+      const [queue, setQueue] = useState([])
+      const [deleting, setDeleting] = useState(null)
+      const [dragOver, setDragOver] = useState(false)
+      const busyRef = useRef(false)
+
+      const load = async () => {
+        try {
+          const response = await fetch(FILES_PATH, { credentials: 'include', cache: 'no-store' })
+          if (!response.ok) throw new Error('HTTP ' + response.status)
+          const body = await response.json()
+          setFiles(Array.isArray(body?.files) ? body.files : [])
+          setLimitMb(typeof body?.limit === 'number' ? Math.round(body.limit / 1048576) : null)
+          const dir = typeof body?.dir === 'string' ? body.dir : ''
+          setPoolDir(dir)
+          setCustom(body?.custom === true)
+          // Keep whatever the user is typing; only seed the box while it is untouched.
+          setDraft((current) => (current === null ? dir : current))
+          setError(null)
+        } catch (cause) {
+          setFiles([])
+          setError('读不到文件列表（' + (cause instanceof Error ? cause.message : String(cause)) + '）。插件刚更新过的话，重启一次 DSH 再试。')
+        }
+      }
+
+      // Load on first visit, and again whenever the user comes back to this tab.
+      useEffect(() => {
+        if (hidden) return
+        load().catch(() => {})
+      }, [hidden])
+
+
+      // The Host opens the OS folder dialog; the browser never learns an absolute path by itself.
+      const pickPoolDir = async () => {
+        setPicking(true)
+        try {
+          const result = await postJson(FILE_POOL_PICK_PATH, {})
+          if (result && result.cancelled === true) return
+          if (!result || result.ok !== true) throw new Error((result && result.error) || '没能选择目录')
+          setDraft(typeof result.dir === 'string' ? result.dir : '')
+          setError(null)
+          await load()
+        } catch (cause) {
+          setError('选择目录失败：' + (cause instanceof Error ? cause.message : String(cause)))
+        } finally {
+          setPicking(false)
+        }
+      }
+
+      const savePoolDir = async () => {
+        setSavingPool(true)
+        try {
+          const result = await postJson(FILE_POOL_PATH, { dir: String(draft ?? '').trim() })
+          if (!result || result.ok !== true) throw new Error((result && result.error) || '保存失败')
+          const next = typeof result.snapshot?.filePoolDir === 'string' ? result.snapshot.filePoolDir : ''
+          setDraft(next)
+          setError(null)
+          await load()
+        } catch (cause) {
+          setError('保存位置失败：' + (cause instanceof Error ? cause.message : String(cause)))
+        } finally {
+          setSavingPool(false)
+        }
+      }
+
+      const uploadOne = (file, onProgress) => new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', FILE_UPLOAD_PATH + '?name=' + encodeURIComponent(file.name))
+        xhr.setRequestHeader('content-type', 'application/octet-stream')
+        xhr.withCredentials = true
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) onProgress(Math.min(0.99, event.loaded / Math.max(1, event.total)))
+        }
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            onProgress(1)
+            resolve()
+            return
+          }
+          let message = 'HTTP ' + xhr.status
+          try {
+            const parsed = JSON.parse(xhr.responseText)
+            if (parsed && typeof parsed.error === 'string') message = parsed.error
+          } catch {
+            /* keep the status code */
+          }
+          reject(new Error(message))
+        }
+        xhr.onerror = () => reject(new Error('网络中断，上传失败'))
+        xhr.onabort = () => reject(new Error('上传已取消'))
+        xhr.send(file)
+      })
+
+      const uploadFiles = async (fileList) => {
+        const picked = Array.from(fileList || []).filter((file) => file && file.size >= 0)
+        if (picked.length === 0) return
+        busyRef.current = true
+        setError(null)
+        for (const file of picked) {
+          const key = Date.now() + '-' + Math.random().toString(36).slice(2, 8)
+          setQueue((current) => current.concat([{ key, name: file.name, percent: 0 }]))
+          try {
+            await uploadOne(file, (percent) => {
+              setQueue((current) => current.map((row) => (row.key === key ? { ...row, percent } : row)))
+            })
+          } catch (cause) {
+            setError(file.name + '：' + (cause instanceof Error ? cause.message : String(cause)))
+          } finally {
+            setQueue((current) => current.filter((row) => row.key !== key))
+          }
+        }
+        busyRef.current = false
+        await load().catch(() => {})
+      }
+
+      const removeFile = async (file) => {
+        if (!window.confirm('从文件池删除「' + file.name + '」？')) return
+        setDeleting(file.id)
+        try {
+          await postJson(FILE_DELETE_PATH, { id: file.id })
+          await load()
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : String(cause))
+        } finally {
+          setDeleting(null)
+        }
+      }
+
+      const uploading = queue.length > 0
+      const totalBytes = (files || []).reduce((sum, file) => sum + (Number(file.size) || 0), 0)
+
+      return h(
+        Card,
+        {
+          title: '文件传输',
+          desc: uploading
+            ? '正在上传…'
+            : '手机和电脑共用一个文件夹，选中即上传' + (limitMb ? '（单个上限 ' + limitMb + ' MB）' : ''),
+          hidden,
+          aside: uploading
+            ? null
+            : h('button', { type: 'button', className: CLS.button, onClick: () => { load().catch(() => {}) } }, '刷新')
+        },
+        error ? h('div', { className: CLS.error }, error) : null,
+        h(
+          'div',
+          { className: CLS.field, hidden: !hostView },
+          h('span', { className: CLS.fieldTip }, '保存位置'),
+          h(
+            'div',
+            { className: CLS.poolRow },
+            h('input', {
+              className: CLS.input,
+              value: draft === null ? '' : draft,
+              spellCheck: false,
+              placeholder: custom ? '' : poolDir,
+              onChange: (event) => setDraft(event.target.value),
+              onKeyDown: (event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  savePoolDir().catch(() => {})
+                }
+              }
+            }),
+            h(
+              'button',
+              { type: 'button', className: CLS.buttonQuiet, disabled: picking, onClick: () => { pickPoolDir().catch(() => {}) } },
+              picking ? '等待选择…' : '选择…'
+            ),
+            h(
+              'button',
+              { type: 'button', className: CLS.button, disabled: savingPool || picking, onClick: () => { savePoolDir().catch(() => {}) } },
+              savingPool ? '保存中…' : '保存'
+            )
+          ),
+          h('p', { className: CLS.fieldTip }, custom ? '自定义目录。换位置不会搬运旧文件。' : '点「选择…」在文件管理器里挑一个文件夹，或直接填路径；手机上看到的就是这个文件夹。')
+        ),
+        h(
+          'label',
+          {
+            className: CLS.uploadBox + (dragOver ? ' ' + CLS.uploadHot : ''),
+            onDragOver: (event) => {
+              event.preventDefault()
+              setDragOver(true)
+            },
+            onDragLeave: () => setDragOver(false),
+            onDrop: (event) => {
+              event.preventDefault()
+              setDragOver(false)
+              uploadFiles(event.dataTransfer?.files).catch(() => {})
+            }
+          },
+          h('strong', { className: CLS.uploadTitle }, uploading ? '正在上传…' : '点击选择文件，或拖到这里'),
+          h('span', { className: CLS.uploadHint }, '手机相册、文档、压缩包都行；同名文件自动加序号，不会覆盖'),
+          h('input', {
+            className: CLS.uploadInput,
+            type: 'file',
+            multiple: true,
+            disabled: uploading,
+            onChange: (event) => {
+              // Copy the FileList BEFORE clearing value: clearing turns the live FileList empty
+              // in Chromium, which silently swallowed every pick ("upload does nothing").
+              const picked = Array.from(event.target.files || [])
+              event.target.value = ''
+              uploadFiles(picked).catch(() => {})
+            }
+          })
+        ),
+        queue.map((row) =>
+          h(
+            'div',
+            { key: row.key, className: CLS.queueRow },
+            h('span', { className: CLS.fileName, title: row.name }, row.name),
+            h('span', { className: CLS.fileSub }, Math.round(row.percent * 100) + '%'),
+            h('div', { className: CLS.progress }, h('div', { className: CLS.progressBar, style: { width: Math.round(row.percent * 100) + '%' } }))
+          )
+        ),
+        files === null
+          ? h('p', { className: CLS.fieldTip }, '加载中…')
+          : files.length === 0
+            ? h('p', { className: CLS.fileEmpty }, '文件池是空的。上面选个文件试试。')
+            : h(
+                'ul',
+                { className: CLS.fileList },
+                files.map((file) =>
+                  h(
+                    'li',
+                    { className: CLS.fileRow, key: file.id },
+                    h('span', { className: CLS.fileExt }, fileExt(file.name)),
+                    h(
+                      'div',
+                      { className: CLS.fileMeta },
+                      h('span', { className: CLS.fileName, title: file.name }, file.name),
+                      h('span', { className: CLS.fileSub }, formatBytes(file.size) + ' · ' + formatFileDate(file.mtime))
+                    ),
+                    h(
+                      'a',
+                      { className: CLS.button, href: FILE_DOWNLOAD_PATH + '?id=' + encodeURIComponent(file.id), download: file.name },
+                      '下载'
+                    ),
+                    h(
+                      'button',
+                      { type: 'button', className: CLS.buttonQuiet, disabled: deleting === file.id, onClick: () => { removeFile(file).catch(() => {}) } },
+                      deleting === file.id ? '…' : '删除'
+                    )
+                  )
+                )
+              ),
+        h('p', { className: CLS.cardNote }, '共 ' + (files?.length || 0) + ' 个' + (totalBytes > 0 ? ' · ' + formatBytes(totalBytes) : '') + '。下载会存到手机的下载目录。')
       )
     }
 
@@ -492,6 +862,18 @@ globalThis.__ModuleLoader__.load({
       const [cfConfirmDelete, setCfConfirmDelete] = useState(false)
       const [confirmingRequest, setConfirmingRequest] = useState(null)
       const [switchNote, setSwitchNote] = useState(null)
+      const [check, setCheck] = useState(null)
+      const [checkBusy, setCheckBusy] = useState(false)
+      // Two pages, like the memory panel: connection plumbing on one, presentation on the other.
+      const [tab, setTab] = useState('connect')
+      // 'host' = the owner's own DSH window; 'client' = a page served through the gateway.
+      // Host-only controls (switch, password, entry mode, device approvals, pool folder) are
+      // hidden from the phone; the gateway also refuses those POSTs with 403.
+      // Newest published version from npm; null until the first answer arrives.
+      const [updateInfo, setUpdateInfo] = useState(null)
+      // The gateway marks every page it forwards with x-dsh-panel-view: client, so the owner's
+      // own window is the only place that sees host-only controls.
+      const hostView = status?.view !== 'client'
 
       const load = async () => {
         try {
@@ -520,6 +902,22 @@ globalThis.__ModuleLoader__.load({
         return () => { alive = false; clearInterval(timer) }
       }, [])
 
+      // Ask npm once per page load whether a newer release exists. The server caches the answer
+      // for six hours, so this is one cheap request even when the panel stays open for days.
+      useEffect(() => {
+        let alive = true
+        const run = async () => {
+          try {
+            const next = await postJson(UPDATE_PATH, {})
+            if (alive && next && !next.error && typeof next.current === 'string') setUpdateInfo(next)
+          } catch {
+            /* offline: the tab bar still shows the installed version */
+          }
+        }
+        run()
+        return () => { alive = false }
+      }, [])
+
       const enabled = Boolean(status?.enabled)
       const phase = status?.phase || 'disabled'
       const phaseBusy = phase === 'starting' || phase === 'stopping' || busy || Boolean(status?.busy)
@@ -534,8 +932,14 @@ globalThis.__ModuleLoader__.load({
           ? '外部隧道（SakuraFrp / frp）'
           : status?.tunnel === 'quick'
             ? 'Cloudflare 快速隧道'
-            : 'Tailscale Serve'
+            : status?.tunnel === 'lan'
+              ? '局域网（虚拟组网）'
+              : 'Tailscale Serve'
       const cloudflare = status?.cloudflare || null
+      const lanPort = (() => {
+        const match = /:(\d+)\//.exec(status?.lanUrl || status?.publicUrl || '')
+        return match ? match[1] : ''
+      })()
       const errorText = actionError || status?.lastError || (fetchError ? '无法读取宿主状态：' + fetchError : '')
 
       // Ticking timer for "已开启 · 已运行 X" and the QR auto-blur countdown.
@@ -653,6 +1057,58 @@ globalThis.__ModuleLoader__.load({
         }
       }
 
+      // Pin the lan entry to one adapter address. The gateway listens on 0.0.0.0 in this mode, so
+      // the only thing that changes is the advertised URL and its QR — instant, no reconnect.
+      const chooseLanAddress = async (address) => {
+        setActionError(null)
+        setBusy(true)
+        try {
+          const next = await postJson(LAN_PATH, { address })
+          if (next?.error) setActionError(next.error)
+          else if (next && next.phase) setStatus(next)
+        } catch (error) {
+          setActionError(error instanceof Error ? error.message : String(error))
+        } finally {
+          setBusy(false)
+          load()
+        }
+      }
+
+      // Pick the viewport phones get. The gateway injects it into the HTML, so it lands on the
+      // next page load — the card offers a reload button right next to the choice.
+      // `deviceId` is only passed from the host panel: a remote phone always changes its own
+      // record (the gateway tells the route which device the cookie belongs to).
+      const chooseUiMode = async (mode, deviceId) => {
+        setActionError(null)
+        setBusy(true)
+        try {
+          const next = await postJson(UI_PATH, deviceId ? { mode, deviceId } : { mode })
+          if (next?.error) setActionError(next.error)
+          else if (next && next.phase) setStatus(next)
+        } catch (error) {
+          setActionError(error instanceof Error ? error.message : String(error))
+        } finally {
+          setBusy(false)
+          load()
+        }
+      }
+
+      // The one-click self-check behind the panel button: the same walk-through I do by hand when
+      // someone reports “can't connect”, so the panel can name the broken hop instead of guessing.
+      const runSelfCheck = async () => {
+        setActionError(null)
+        setCheckBusy(true)
+        try {
+          const body = await postJson(SELFCHECK_PATH, {})
+          if (body?.error) setActionError(body.error)
+          else if (Array.isArray(body?.steps)) setCheck(body)
+        } catch (error) {
+          setActionError(error instanceof Error ? error.message : String(error))
+        } finally {
+          setCheckBusy(false)
+        }
+      }
+
       const togglePasswordProtection = async () => {
         setActionError(null)
         setBusy(true)
@@ -765,14 +1221,56 @@ globalThis.__ModuleLoader__.load({
           )
         : null
       const downloadNote = cfDown ? h('p', { className: CLS.barNote }, cfBarText) : null
-            const entryOptions = [['external', 'SakuraFrp / 外部'], ['quick', 'Cloudflare'], ['none', '仅本机'], ['tailscale', 'Tailscale']]
+            const entryOptions = [['lan', '局域网 / 虚拟组网'], ['external', 'SakuraFrp / 外部'], ['quick', 'Cloudflare'], ['none', '仅本机'], ['tailscale', 'Tailscale']]
+            const uiModeOptions = [['auto', '自动'], ['phone', '手机'], ['tablet', '平板'], ['compat', '兼容']]
+            const uiModeTips = {
+              auto: '按设备识别：手机→原生手机版，平板→桌面版，其他→兼容版。认错设备时手动锁一档。',
+              phone: '原生手机版：真手机字号，侧栏变抽屉、设置改全屏。手机上首选这一档。',
+              tablet: '平板用桌面布局，按真实宽度铺满、不缩放。8 寸以上选它。',
+              compat: '把 1280 宽桌面页整体缩小塞进屏幕：最保真，但字最小，只作兜底。',
+              default: '跟随电脑上设的默认模式；选其它值只改变这一台设备。'
+            }
+            // Per-device rows also offer "follow the default" so an override can be undone.
+            const deviceUiOptions = [['default', '跟随默认']].concat(uiModeOptions)
+            const uiDevices = hostView ? (status?.deviceList || []).filter((entry) => entry.state === 'trusted') : []
+            const uiDeviceRows = hostView
+              ? uiDevices.length === 0
+                ? h('p', { className: CLS.cardNote }, '还没有已批准的设备。手机通过验证后会出现在这里，可以单独给它选一档。')
+                : h(
+                    'div',
+                    null,
+                    uiDevices.map((entry) =>
+                      h(
+                        'div',
+                        { key: entry.deviceId, className: CLS.device },
+                        h('span', { className: CLS.deviceName }, (entry.label || '未知设备') + (entry.online ? ' · 在线' : '')),
+                        h(Seg, {
+                          options: deviceUiOptions,
+                          value: entry.uiMode || 'default',
+                          onPick: (mode) => chooseUiMode(mode, entry.deviceId),
+                          disabled: busy
+                        })
+                      )
+                    )
+                  )
+              : null
+            // Auto only means something if the panel says what it picked last time.
+            const uiProbe = status?.uiModeProbe
+            const uiProbeLabel = { phone: '手机版', tablet: '平板版', compat: '兼容版' }[uiProbe?.mode] || '兼容版'
+            const uiProbeMinutes = uiProbe ? Math.max(0, Math.round((Date.now() - Number(uiProbe.at)) / 60000)) : 0
+            const uiProbeAgo = !uiProbe ? '' : uiProbeMinutes < 1 ? '刚刚' : uiProbeMinutes < 60 ? uiProbeMinutes + ' 分钟前' : Math.round(uiProbeMinutes / 60) + ' 小时前'
+            const uiProbeText = !uiProbe
+              ? '还没有手机或平板连进来，暂时看不出会自动选哪一档。'
+              : '最近一次自动识别 → ' + uiProbeLabel + '（' + uiProbeAgo + '，来自 ' + (uiProbe.label || '未知设备') + '）'
       const entryTip = status?.tunnel === 'external'
         ? '填好下面的外网地址，面板的网址和二维码都会用它。'
         : status?.tunnel === 'quick'
           ? '免账号：插件自己下载 cloudflared 建隧道，地址每次重启都会变。下不动就点「停止下载」再重试，或把 cloudflared.exe 放到 ~/.dsh/remote-access/bin/。'
           : status?.tunnel === 'none'
             ? '不起隧道，只监听本机端口；手机连不上，适合在本机调试。'
-            : '需要本机已登录 Tailscale，并已把这个网关端口 serve 出去。不推荐：走 DERP 中继时延迟高，能用外部隧道或 Cloudflare 就别用它。'
+            : status?.tunnel === 'lan'
+              ? '手机和电脑连同一个 Wi-Fi，或先连上皎月连 / ZeroTier 这类虚拟组网；网关会监听所有网卡，二维码用下面列表里的第一个地址。'
+              : '需要本机已登录 Tailscale，并已把这个网关端口 serve 出去。不推荐：走 DERP 中继时延迟高，能用外部隧道或 Cloudflare 就别用它。'
       const connectTip = enabled
         ? (status?.tunnel === 'external'
             ? '首次访问会提示证书不受信任：点「高级 → 继续前往」。'
@@ -780,7 +1278,9 @@ globalThis.__ModuleLoader__.load({
               ? 'Cloudflare 免费隧道的地址每次重启都会变，换了地址要重新扫码。'
               : status?.tunnel === 'none'
                 ? '当前只有本机能访问，手机连不上。'
-                : '手机需安装 Tailscale 并登录同一账号；走中继时延迟会明显偏高。')
+                : status?.tunnel === 'lan'
+                  ? '手机要和电脑在同一网段；用虚拟组网就先确认两端连着同一个网络。主地址进不去就换列表里另一个地址。'
+                  : '手机需安装 Tailscale 并登录同一账号；走中继时延迟会明显偏高。')
         : '打开开关后生成二维码：一次性登录链接（10 分钟），扫一次就失效，截图外发也进不来。'
 
       return h(
@@ -801,27 +1301,87 @@ globalThis.__ModuleLoader__.load({
             ),
             h('p', { className: CLS.subtitle }, '手机在任意网络都能接着用这台电脑上的同一个会话：打开开关、扫码、输密码。')
           ),
-          h(
-            'button',
-            {
-              type: 'button',
-              role: 'switch',
-              'aria-checked': enabled,
-              'aria-label': '远程访问开关',
-              disabled: phaseBusy,
-              onClick: toggle,
-              title: enabled ? '点击关闭远程访问' : '点击开启远程访问',
-              className: CLS.switchButton + (enabled ? ' ' + CLS.switchOn : '')
-            },
-            h('span', { className: CLS.switchThumb })
-          )
+          hostView
+            ? h(
+                'button',
+                {
+                  type: 'button',
+                  role: 'switch',
+                  'aria-checked': enabled,
+                  'aria-label': '远程访问开关',
+                  disabled: phaseBusy,
+                  onClick: toggle,
+                  title: enabled ? '点击关闭远程访问' : '点击开启远程访问',
+                  className: CLS.switchButton + (enabled ? ' ' + CLS.switchOn : '')
+                },
+                h('span', { className: CLS.switchThumb })
+              )
+            : h('div', { className: CLS.cardNote }, '请在 host 端查看')
         ),
 
         errorText ? h('div', { className: CLS.error }, errorText) : null,
 
+        hostView
+          ? null
+          : h(
+              'div',
+              { className: CLS.note },
+              '你现在是从远程页面看的：开关、网络入口、设备准入、文件池位置这些都要在电脑本机的面板上改。传文件、看地址不受影响。'
+            ),
+
+        h(
+          'div',
+          { className: CLS.tabBar, role: 'tablist', 'aria-label': '面板分区' },
+          [['connect', '连接与设备'], ['files', '文件传输'], ['ui', '界面']]
+            .map((option) =>
+            h(
+              'button',
+              {
+                key: option[0],
+                type: 'button',
+                role: 'tab',
+                'aria-selected': tab === option[0],
+                className: CLS.tabBtn + (tab === option[0] ? ' ' + CLS.tabBtnOn : ''),
+                onClick: () => setTab(option[0])
+              },
+              option[1]
+            )
+          ).concat([
+            h(
+              'span',
+              { className: CLS.tabMeta, key: 'meta' },
+              h('span', { className: CLS.tabVersion, title: '插件版本' }, 'v' + (status?.pluginVersion || '—')),
+              updateInfo && updateInfo.hasUpdate
+                ? h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: CLS.tabUpdate,
+                      title: '点击复制升级命令',
+                      onClick: async () => {
+                        const command = 'npm i -g dsh-mobile-harness@' + updateInfo.latest
+                        const ok = await copyText(command)
+                        setSwitchNote(ok ? '升级命令已复制：' + command + '，装完重启 DSH 生效' : '复制失败，请手动执行：' + command)
+                      }
+                    },
+                    '可更新 ' + updateInfo.latest
+                  )
+                : null
+            )
+          ])
+        ),
+
+        !hostView && tab === 'connect'
+          ? h(
+              Card,
+              { title: '连接与设备', desc: '远程开关、网络入口、一键自检、设备准入' },
+              h('p', { className: CLS.cardNote }, '请在 host 端查看：这些设置只在本机生效，在电脑上的 DSH 面板里改。手机这边可以传文件、也能看到地址。')
+            )
+          : null,
+
         h(
           Card,
-          { title: '连接', desc: '扫码直接进；也可以手动打开网址输密码' },
+          { title: '连接', desc: '扫码直接进；也可以手动打开网址输密码', hidden: !hostView || tab !== 'connect' },
           h(
             'div',
             { className: CLS.body },
@@ -928,7 +1488,7 @@ globalThis.__ModuleLoader__.load({
 
         h(
           Card,
-          { title: '网络入口', desc: '手机怎么找到这台电脑' },
+          { title: '网络入口', desc: '手机怎么找到这台电脑', hidden: !hostView || tab !== 'connect' },
           h(
             'div',
             { className: CLS.fields },
@@ -955,7 +1515,71 @@ globalThis.__ModuleLoader__.load({
                   }),
                   h('button', { type: 'button', className: CLS.button, disabled: phaseBusy, onClick: saveExternal }, '保存'),
                   h('button', { type: 'button', className: CLS.button, disabled: phaseBusy, onClick: detectExternal }, '自动检测'),
-                  h(CopyButton, { text: status?.externalUrl || '' })
+                  h(CopyButton, { text: status?.externalUrl || '' }),
+                  h('p', { className: CLS.portRow },
+                    '隧道转发目标端口',
+                    h('span', { className: CLS.portChip, title: '点一下复制', onClick: () => copyText(String(status?.proxyPort || '')) }, String(status?.proxyPort || '—')),
+                  ),
+                  // Two different facts, two different sentences: a red banner only when frpc is
+                  // genuinely not connected AND its target port disagrees with the gateway. A
+                  // healthy tunnel that merely has an old failure line in its log stays quiet.
+                  status?.relayPortMismatch
+                    ? h('p', { className: CLS.fieldTip }, 'frpc 没连上，而且它转发到 127.0.0.1:' + status.relayLocalPort + (status.relay?.localPortAt ? '（记录于 ' + status.relay.localPortAt + '）' : '') + '。把 SakuraFrp 这条隧道的「本地端口」改成 ' + status.proxyPort + '，保存即恢复。')
+                    : status?.relay?.localPort && status.relay.localPort !== status.proxyPort
+                      ? h('p', { className: CLS.cardNote }, '历史记录里 frpc 曾转发到 ' + status.relay.localPort + '（' + (status.relay.localPortAt || '旧日志') + '）；外网地址能通就以探测结果为准。')
+                      : status?.relay?.refused && status.relay.localPort === status.proxyPort
+                        ? h('p', { className: CLS.cardNote }, 'frpc 已经连上 frp，但 127.0.0.1:' + status.proxyPort + ' 没人监听（' + (status.relay.refusedAt || '刚刚') + '）：先确认面板顶部的总开关是打开的，以及 DSH 还在运行。')
+                        : null
+                )
+              : null,
+            status?.tunnel === 'lan'
+              ? h(
+                  Field,
+                  {
+                    label: '本机地址',
+                    tip: '手机用哪个地址进来。同一个 Wi-Fi 或虚拟组网里每个地址都能通，二维码只编码开关打开的那一个——拨一下开关，二维码立刻改装该地址，不用重连。'
+                  },
+                  h(
+                    'div',
+                    { className: CLS.lanBox },
+                    (status?.lanAddresses || []).length === 0
+                      ? h('span', { className: CLS.value }, '没找到非回环 IPv4 地址')
+                      : (status?.lanAddresses || []).map((entry) =>
+                          h(
+                            'div',
+                            {
+                              key: entry.address,
+                              className: CLS.lanCard + (entry.selected ? ' ' + CLS.lanCardOn : '')
+                            },
+                            h(
+                              'div',
+                              { className: CLS.lanMain },
+                              h('span', { className: CLS.lanAddr + ' ' + CLS.mono }, entry.address),
+                              h('span', { className: CLS.lanNic }, entry.name)
+                            ),
+                            h(CopyButton, { text: lanPort ? 'http://' + entry.address + ':' + lanPort + '/' : 'http://' + entry.address + '/' }),
+                            h(
+                              'button',
+                              {
+                                type: 'button',
+                                role: 'switch',
+                                'aria-checked': Boolean(entry.selected),
+                                className: CLS.lanSwitch + (entry.selected ? ' ' + CLS.lanSwitchOn : ''),
+                                disabled: phaseBusy,
+                                onClick: () => chooseLanAddress(entry.selected ? '' : entry.address),
+                                title: entry.selected ? '正在使用这个地址，点一下取消指定（回到自动）' : '让二维码改用这个地址'
+                              },
+                              h('span', { className: CLS.lanThumb })
+                            )
+                          )
+                        ),
+                    status?.lanAddress && (status?.lanAddresses || []).every((entry) => !entry.selected)
+                      ? h('p', { className: CLS.fieldTip }, '记住的地址 ' + status.lanAddress + ' 现在不在线（网卡拔了或虚拟组网没连），已临时改用第一个。')
+                      : null,
+                    (status?.lanAddresses || []).length > 1
+                      ? h('p', { className: CLS.cardNote }, '只开一个开关：二维码就用那条地址。全部关掉＝按优先级自动挑，网卡掉了也会自动回退。')
+                      : null
+                  )
                 )
               : null,
             status?.tunnel === 'quick'
@@ -1037,17 +1661,113 @@ globalThis.__ModuleLoader__.load({
                     '重新配置连接'
                   )
                 )
-              : null,
-            status?.proxyPort
-              ? h('p', { className: CLS.cardNote }, '插件 ' + (status?.pluginVersion || '未知') + ' · 网关监听 127.0.0.1:' + status.proxyPort + (status?.tlsPort ? '，自签 TLS 备用端口 ' + status.tlsPort : '') + '。')
               : null
           )
+        ),
+
+        h(FilesPanel, { key: 'files', hidden: tab !== 'files', hostView }),
+
+        h(
+          Card,
+          {
+            title: hostView ? '界面模式' : '这台设备的界面',
+            hidden: tab !== 'ui',
+            desc: hostView
+              ? '手机上字太小、按钮点不准时改这里；每台设备还能各用一档'
+              : '只影响你手上这台设备，改完点「刷新页面」生效',
+            aside: h(
+              'button',
+              { type: 'button', className: CLS.button, onClick: () => window.location.reload() },
+              '刷新页面'
+            )
+          },
+          h(
+            'div',
+            { className: CLS.fields },
+            h(
+              Field,
+              {
+                label: hostView ? '默认模式' : '本机模式',
+                tip: uiModeTips[hostView ? (status?.uiMode || 'auto') : (status?.deviceUiMode || 'default')] || uiModeTips.auto
+              },
+              hostView
+                ? h(Seg, { options: uiModeOptions, value: status?.uiMode || 'auto', onPick: (mode) => chooseUiMode(mode), disabled: busy })
+                : h(Seg, { options: deviceUiOptions, value: status?.deviceUiMode || 'default', onPick: (mode) => chooseUiMode(mode), disabled: busy }),
+              h(
+                'p',
+                { className: CLS.fieldTip },
+                hostView
+                  ? '默认档给所有还没单独选过的设备用；下面每台设备可以各自覆盖。'
+                  : '「跟随默认」= 用电脑上设的那一档；选其它值只改变这一台。'
+              ),
+              (hostView ? (status?.uiMode || 'auto') : (status?.deviceUiMode || 'default')) === 'auto'
+                ? h('p', { className: CLS.fieldTip }, uiProbeText)
+                : null
+            )
+          ),
+          uiDeviceRows
+        ),
+
+        h(
+          Card,
+          {
+            title: '一键自检',
+            hidden: !hostView || tab !== 'connect',
+            desc: '手机连不上时，先点这里定位断点',
+            aside: h(
+              'button',
+              {
+                type: 'button',
+                className: CLS.button,
+                disabled: checkBusy,
+                onClick: runSelfCheck
+              },
+              checkBusy ? '逐段检测中…' : '开始自检'
+            )
+          },
+          !check
+            ? h('p', { className: CLS.cardNote }, '按手机请求经过的顺序逐段检查：总开关 → 网关 → DSH 本体 → 隧道 → 外网地址 → 设备准入。标红的那一行就是断点，下面灰字是改法。')
+            : h(
+                'div',
+                null,
+                h(
+                  'div',
+                  { className: CLS.fields },
+                  check.steps.map((step) =>
+                    h(
+                      'div',
+                      { key: step.id, style: { display: 'flex', gap: '10px', alignItems: 'flex-start' } },
+                      h(
+                        'span',
+                        {
+                          style: {
+                            flex: '0 0 auto',
+                            marginTop: '2px',
+                            fontSize: '12px',
+                            lineHeight: '18px',
+                            color: step.status === 'ok' ? '#22c55e' : step.status === 'fail' ? '#ef4444' : '#f59e0b'
+                          }
+                        },
+                        '●'
+                      ),
+                      h(
+                        'div',
+                        { style: { minWidth: 0 } },
+                        h('div', { className: CLS.value }, step.label + ' · ' + step.detail),
+                        step.hint ? h('p', { className: CLS.fieldTip }, step.hint) : null
+                      )
+                    )
+                  )
+                ),
+                h('p', { className: CLS.cardNote }, check.ok ? '链路是通的：手机扫码应该能进；进不去就看看手机是不是没点「允许」。' : '标红的那一行就是断点，按它下面的提示改。')
+              )
         ),
 
         h(
           Card,
           {
             title: '设备准入',
+            hidden: !hostView || tab !== 'connect',
             desc: '谁可以连上这台电脑',
             aside: [
               h(
@@ -1538,27 +2258,102 @@ html[data-dru-mobile] .dru-mobile-launcher{position:fixed;left:8px;top:8px;width
 html[data-dru-mobile] .dru-mobile-launcher img{width:20px;height:20px;display:block}
 html[data-dru-mobile] .dru-mobile-launcher:active{transform:scale(.94)}
 html[data-dru-mobile].dru-drawer-open .dru-mobile-launcher,html[data-dru-mobile].dru-right-open .dru-mobile-launcher{display:none}
+/* iOS zooms the whole page when a focused field is under 16px, and that zoom is one more way to
+   end up with a control the user cannot tap. Keep the composer and every text field at 16px. */
+html[data-dru-mobile] textarea,html[data-dru-mobile] input:not([type="checkbox"]):not([type="radio"]){font-size:16px!important}
 `
 
     function installMobileSkin() {
       const query = window.matchMedia('(max-width: 760px)')
+      // The gateway stamps data-dru-ui on <html> after deciding the mode for this device. When it
+      // says "phone" the skin applies no matter the CSS width (a landscape phone is 844px), and
+      // when it says "tablet"/"compat" the skin stays off even if the browser window is narrow.
+      const forcedMode = () => document.documentElement.getAttribute('data-dru-ui')
       let teardown = null
       const sync = () => {
-        if (!query.matches) {
+        const forced = forcedMode()
+        const want = forced ? forced === 'phone' : query.matches
+        if (!want) {
           if (teardown) { teardown(); teardown = null }
           return
         }
-        if (!teardown) teardown = setupMobileSkin()
+        if (!teardown) teardown = setupMobileSkin(forced)
       }
       query.addEventListener('change', sync)
       sync()
+      // The function list in the rail can fold away on a phone, so the session list gets the height.
+      const navFoldTeardown = installNavFold()
       return () => {
         query.removeEventListener('change', sync)
         if (teardown) { teardown(); teardown = null }
+        navFoldTeardown()
       }
     }
 
-    function setupMobileSkin() {
+
+    /**
+     * The rail's function list (插件 / 自动化任务 / 生活 …) eats the top half of a phone drawer and
+     * leaves the workspace list cramped. A one-line header folds it away so the sessions get the
+     * height instead. Only offered where the rail is actually expanded — at 56 px the icons ARE
+     * the rail — and only on narrow layouts, so the desktop panel keeps its normal sidebar.
+     */
+    function installNavFold() {
+      const KEY = 'dru-nav-folded'
+      const styleId = 'dru-nav-style'
+      if (!document.getElementById(styleId)) {
+        const style = document.createElement('style')
+        style.id = styleId
+        style.textContent = [
+          '.dru-nav-folded{display:none!important}',
+          '.dru-nav-toggle{display:flex;align-items:center;justify-content:space-between;width:100%;margin:2px 0 4px;padding:5px 8px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-tertiary,#8a93a3);font-size:11px;line-height:18px;cursor:pointer;font-family:inherit;text-align:left}',
+          '.dru-nav-toggle:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+          '.dru-nav-toggle[hidden]{display:none}'
+        ].join('')
+        document.head.appendChild(style)
+      }
+      let folded = false
+      try { folded = window.localStorage.getItem(KEY) === '1' } catch {}
+      const bar = document.createElement('button')
+      bar.type = 'button'
+      bar.className = 'dru-nav-toggle'
+      const label = document.createElement('span')
+      const caret = document.createElement('span')
+      caret.setAttribute('aria-hidden', 'true')
+      bar.appendChild(label)
+      bar.appendChild(caret)
+      const paint = () => {
+        label.textContent = folded ? '功能入口（已收起）' : '功能入口'
+        caret.textContent = folded ? '\u25be' : '\u25b4'
+        bar.title = folded ? '展开插件与工具入口' : '收起插件与工具入口'
+      }
+      const sync = () => {
+        const nav = document.querySelector('nav[class*="_panelList"]')
+        const rail = document.querySelector('[class*="_sidebarCol"]')
+        const narrow = window.innerWidth <= 900 || document.documentElement.hasAttribute('data-dru-mobile')
+        if (!nav || !rail || !narrow) { bar.hidden = true; nav?.classList.remove('dru-nav-folded'); return }
+        const wide = rail.getBoundingClientRect().width >= 200
+        bar.hidden = !wide
+        if (!wide) { nav.classList.remove('dru-nav-folded'); return }
+        if (nav.previousElementSibling !== bar && nav.parentElement) nav.parentElement.insertBefore(bar, nav)
+        nav.classList.toggle('dru-nav-folded', folded)
+      }
+      bar.addEventListener('click', () => {
+        folded = !folded
+        try { window.localStorage.setItem(KEY, folded ? '1' : '0') } catch {}
+        paint()
+        sync()
+      })
+      paint()
+      sync()
+      const timer = window.setInterval(sync, 1200)
+      return () => {
+        window.clearInterval(timer)
+        bar.remove()
+        document.querySelector('nav[class*="_panelList"]')?.classList.remove('dru-nav-folded')
+      }
+    }
+
+    function setupMobileSkin(forcedMode) {
       const root = document.documentElement
       const styleId = 'dru-mobile-style'
       let styleNode = document.getElementById(styleId)

@@ -15,6 +15,19 @@ import net from 'node:net'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 
 const SESSION_COOKIE = 'dsh-gw'
+
+/** Panel actions that only make sense on the owner's own machine. */
+const HOST_ONLY_API = new Set([
+  '/api/dsh-mobile-harness.toggle',
+  '/api/dsh-mobile-harness.password',
+  '/api/dsh-mobile-harness.external',
+  '/api/dsh-mobile-harness.cloudflared',
+  '/api/dsh-mobile-harness.lan',
+  '/api/dsh-mobile-harness.pool',
+  '/api/dsh-mobile-harness.poolpick',
+  '/api/dsh-mobile-harness.devices',
+  '/api/dsh-mobile-harness.reset'
+])
 const SESSION_MAX_AGE_SECONDS = 30 * 24 * 3600
 
 /**
@@ -88,6 +101,61 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[<>&"']/g, (ch) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' })[ch])
 }
 
+/**
+ * DSH's web frontend ships a desktop-only layout: its stylesheet has no width breakpoint, so a
+ * 360-430px phone viewport squeezes the sidebar and the conversation pane until controls sit
+ * off-screen and the page stops scrolling. A DOM-level patch would break on every frontend
+ * upgrade, so the fix sits at the one boundary we control: the HTML navigation response. A phone
+ * gets a fixed desktop viewport width, so every control lays out exactly as it does on a desktop
+ * and the browser scales the result down to fit; desktop browsers are served untouched.
+ */
+/** Phone and tablet user agents; both need the fixed-width viewport because the frontend has no breakpoints. */
+const PHONE_UA = /Android.*Mobile|iPhone|iPod|Opera Mini|IEMobile|Mobile|HarmonyOS|Windows Phone/i
+/** Checked first: an iPad in desktop mode still says "Mobile", and Android tablets omit it entirely. */
+const TABLET_UA = /iPad|Tablet|Macintosh.*Mobile|Android(?!.*Mobile)|MatePad|SM-T\d|Pad$/i
+/**
+ * Only the compat mode pins a canvas width; phone and tablet now use the real device width so the
+ * in-page mobile skin engages and text renders at a genuine phone size instead of a shrunken 1280.
+ */
+export const UI_VIEWPORTS = Object.freeze({ compat: 1280 })
+export const UI_MODES = Object.freeze(['auto', 'phone', 'tablet', 'compat'])
+
+/**
+ * Pick the layout the current request should see. `auto` sniffs the user agent; an explicit mode
+ * always wins so the owner can force phone/tablet/compat from the panel.
+ */
+export function resolveUiMode(mode, userAgent) {
+  const wanted = UI_MODES.includes(mode) ? mode : 'auto'
+  if (wanted !== 'auto') return wanted
+  const ua = String(userAgent || '')
+  if (TABLET_UA.test(ua)) return 'tablet'
+  if (PHONE_UA.test(ua)) return 'phone'
+  return 'compat'
+}
+
+/**
+ * Rewrite the viewport of a navigation response so a phone lays out on a fixed desktop canvas
+ * instead of squeezing the desktop-only layout into 390px.
+ */
+export function injectViewport(html, mode) {
+  let text = String(html)
+  if (mode === 'phone' || mode === 'tablet') {
+    // Native width: the in-page mobile skin needs a real 390-430px CSS viewport to engage, and
+    // scaling a fixed 1280 canvas down is exactly what made text unreadably small. `data-dru-ui`
+    // tells the page which layout the gateway chose, so the skin never has to re-guess it.
+    text = text.replace(/<html([^>]*)>/i, '<html$1 data-dru-ui="' + mode + '">')
+    const native = '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content, user-scalable=yes" />'
+    const found = /<meta[^>]*\bname=["']viewport["'][^>]*>/i
+    return found.test(text) ? text.replace(found, native) : text.replace(/<head[^>]*>/i, (tag) => tag + native)
+  }
+  // compat: the pre-skin behaviour — a fixed desktop canvas the phone scales down. It is the
+  // fallback for devices where the skin's selectors no longer match, not the default.
+  const width = UI_VIEWPORTS.compat
+  const meta = '<meta name="viewport" content="width=' + width + ', maximum-scale=5, user-scalable=yes" />'
+  const existing = /<meta[^>]*\bname=["']viewport["'][^>]*>/i
+  return existing.test(text) ? text.replace(existing, meta) : text.replace(/<head[^>]*>/i, (tag) => tag + meta)
+}
+
 /** The browser form posts urlencoded; the in-page poller posts JSON. Accept both. */
 function parseFormBody(text, contentType) {
   const raw = String(text || '')
@@ -125,9 +193,16 @@ export class GatewayProxy {
     this.sessionSockets = new Map()
     /** deviceId -> { count, firstAt }: failed /__verify attempts inside the current window. */
     this.failures = new Map()
+    /** Last phone/tablet navigation: what "auto" resolved to ({ mode, at, label }). */
+    this.uiProbe = null
     /** The one live scan ticket (see TICKET_TTL_MS); burnt on the first scan. */
     this.ticket = null
     this.ticketExpiresAt = 0
+  }
+
+  /** What the gateway resolved for the most recent phone/tablet navigation (null = none yet). */
+  uiModeEffective() {
+    return this.uiProbe ?? null
   }
 
   // ── one-time scan ticket ─────────────────────────────────────────────────
@@ -1010,7 +1085,7 @@ export class GatewayProxy {
 </body></html>`
   }
 
-  async bind(preferredPort) {
+  async bind(preferredPort, host = '127.0.0.1') {
     const candidates = []
     if (Number.isInteger(preferredPort) && preferredPort > 0) candidates.push(preferredPort)
     candidates.push(...CANDIDATE_PORTS)
@@ -1038,12 +1113,12 @@ export class GatewayProxy {
           }
           server.once('error', onError)
           server.once('listening', onListening)
-          server.listen(port, '127.0.0.1')
+          server.listen(port, host)
         })
         this.server = server
         this.port = port
         this.startedAt = Date.now()
-        await this.bindTls()
+        await this.bindTls(host)
         return port
       } catch (error) {
         lastError = error
@@ -1061,7 +1136,7 @@ export class GatewayProxy {
    * Bind the TLS twin of the loopback listener. Relays such as SakuraFrp reject plain
    * HTTP on a TCP tunnel; HTTPS keeps the traffic opaque to them and satisfies their policy.
    */
-  async bindTls() {
+  async bindTls(host = '127.0.0.1') {
     const tlsOptions = this.options.tls
     if (!tlsOptions) return null
     const candidates = []
@@ -1095,7 +1170,7 @@ export class GatewayProxy {
           }
           server.once('error', onError)
           server.once('listening', onListening)
-          server.listen(port, '127.0.0.1')
+          server.listen(port, host)
         })
         this.tlsServer = server
         this.tlsPort = port
@@ -1120,6 +1195,24 @@ export class GatewayProxy {
     delete headers.origin
     delete headers.referer
     delete headers.authorization
+    // A navigation may be rewritten on the way back (injectViewport), and a compressed body
+    // cannot be rewritten without inflating it first, so ask for identity on navigations only.
+    if (/text\/html/i.test(String(req.headers.accept || ''))) headers['accept-encoding'] = 'identity'
+    // Everything the gateway forwards came from a phone/tablet or another machine, never from
+    // the owner's own DSH window (which talks to the upstream port directly). The panel uses
+    // this to hide host-only controls; a client-side spoofed value is overwritten here.
+    headers['x-dsh-panel-view'] = 'client'
+    // The browser's own cookies never reach DSH — the owner cookie replaces them — so the device
+    // identity travels in a header the gateway owns. Strip first: a phone must not be able to
+    // claim another device id by sending the header itself.
+    delete headers['x-dsh-device-id']
+    // The device cookie can be cleared (private mode, a fresh browser); the session cookie still
+    // names the device, so fall back to it rather than losing the per-device choices.
+    const forwardedDevice = readCookie(req, DEVICE_COOKIE)
+      || this.resolveSession(readCookie(req, SESSION_COOKIE))?.deviceId
+    if (typeof forwardedDevice === 'string' && forwardedDevice.length >= 6) {
+      headers['x-dsh-device-id'] = forwardedDevice
+    }
     return headers
   }
 
@@ -1194,6 +1287,14 @@ export class GatewayProxy {
         clean.searchParams.delete('t')
         req.url = clean.pathname + (clean.search || '')
       }
+      // Host-only settings never apply from a remote page: the switch, the password, the
+      // entry mode, device approvals, the pool location. The panel hides them, and this is the
+      // second line of defence for a client that calls the API anyway.
+      if (HOST_ONLY_API.has(url.pathname) && req.method === 'POST') {
+        res.writeHead(403, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end('{"ok":false,"error":"这个设置要在电脑本机的面板上改。"}')
+        return
+      }
       this.proxyRequest(req, res, this.touchDevice(req))
     } catch (error) {
       this.options.log?.(`gateway request failed: ${String(error)}`)
@@ -1246,6 +1347,30 @@ export class GatewayProxy {
         if (queryAt !== -1) path = path.slice(0, queryAt)
         const cacheControl = this.cachePolicy(path, upstreamRes.statusCode)
         if (cacheControl && req.method !== 'POST') headers = { ...headers, 'cache-control': cacheControl }
+        const ua = String(req.headers['user-agent'] || '')
+        // A phone that picked its own layout wins over the global default.
+        const uiMode = resolveUiMode(this.options.getDeviceUiMode?.(device?.id) ?? this.options.getUiMode?.(), ua)
+        // Remember what "auto" resolved to on the last phone/tablet navigation, so the panel can
+        // say "this is what auto picks" instead of leaving the owner to guess.
+        if (PHONE_UA.test(ua) || TABLET_UA.test(ua)) {
+          this.uiProbe = { mode: uiMode, at: Date.now(), label: describeUserAgent(ua) }
+        }
+        const rewriteHtml = req.method === 'GET'
+          && (PHONE_UA.test(ua) || TABLET_UA.test(ua))
+          && /text\/html/i.test(String(headers['content-type'] || ''))
+          && !headers['content-encoding']
+        if (rewriteHtml) {
+          const chunks = []
+          upstreamRes.on('data', (chunk) => chunks.push(chunk))
+          upstreamRes.on('end', () => {
+            const body = Buffer.from(injectViewport(Buffer.concat(chunks).toString('utf8'), uiMode), 'utf8')
+            const outHeaders = { ...headers, 'content-length': String(body.length) }
+            delete outHeaders['transfer-encoding']
+            if (!res.headersSent) res.writeHead(upstreamRes.statusCode ?? 502, outHeaders)
+            res.end(body)
+          })
+          return
+        }
         res.writeHead(upstreamRes.statusCode ?? 502, headers)
         upstreamRes.pipe(res)
       }
@@ -1405,10 +1530,10 @@ export class GatewayProxy {
     socket.once('end', () => upstreamSocket.destroy())
   }
 
-  async start(preferredPort) {
+  async start(preferredPort, host = '127.0.0.1') {
     if (this.server) return this.port
     this.dshCookie = await this.options.getDshCookie()
-    await this.bind(preferredPort)
+    await this.bind(preferredPort, host)
     return this.port
   }
 
