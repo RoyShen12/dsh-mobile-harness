@@ -2,7 +2,15 @@
 
 本文记录插件 `1.2.0` 的手机 / 折叠屏 Web UI 架构、宿主 DOM 契约、适配器维护方法，以及 OPPO Find N5 手工检查清单。目标是优化手机窄屏和展开态触控体验，同时保留宿主原生控件的状态与行为。
 
-## 布局模式
+## 宿主版本分流（skin 2.2.0）
+
+`window.__DSH_BOOT__.release.version` 为 `0.2.2-rc.1` 及后续版本时，插件保留官方原生 UI，跳过 `setupMobileSkin()` 与 `installNavFold()`，不注入旧 CSS、launcher、viewport meta、键盘 / Enter 拦截、drawer history / inert 或 settings 标记。诊断为 `active:false, layout:native, compatibility:native`，同时返回 `hostVersion`。显式 `compat` 档继续保留 `1280px` 画布并报告 `layout:compat`。
+
+缺少有效 release 的自定义构建可在原生 drawer 挂载后，通过同一 frame 的 `data-sidebar-drawer`、`data-sidebar-mask`、`data-sidebar-opener` 识别原生布局；该结果在本次页面生命周期内保留，扩大窗口后继续使用原生 UI。自定义构建需提供与源码相符的 release，带有效旧版本标签的构建按旧版处理。网关通过宿主的 JSON boot assignment 识别同一版本，原生 phone / tablet 档保留宿主 viewport 内容，旧版继续使用 `interactive-widget=resizes-content`。
+
+`lib/ui-compat.js` 与 Client chunk 各自使用相同的数字版本判据，由 `tools/test-ui-compat.mjs` 核对一致性。旧版结构适配的入口与下列约定继续用于 `0.2.1-rc.5`。
+
+## 旧宿主布局模式
 
 Skin 在 `(max-width: 640px)` 或 `(any-pointer: coarse) and (max-width: 1366px)` 下启用。小于等于 `640px` 的宽度采用紧凑单栏；触控设备的宽屏 / 折叠屏展开态标记为 `expanded`，保留宿主的 `64px` 导航 rail，不再强制套用手机单栏。
 
@@ -69,6 +77,22 @@ MutationObserver 在 shell 尚未挂载时短暂观察 body 子树；识别到 f
 - 从屏幕左缘开始的触控水平滑动可以打开导航；导航内左滑可关闭。编辑器、代码、表格、dialog、menu 与缩放状态会排除在边缘手势之外。
 - `window.__dshMobileSkin.getState()` 返回 skin 版本、layout、compatibility、missing、keyboardOpen、overlay、syncCount 和 viewport 尺寸。它不包含会话正文、凭据或设备身份信息。`refresh()` 可要求适配器重新同步。
 - 维护时优先保留宿主原生按钮与 ARIA 交互；遇到 DOM 不匹配先检查 `getState().missing` 和浏览器控制台警告，不要用镜像按钮或固定 hash 菜单类绕过契约。
+
+## Find N5 实机回归（skin 2.2.3）
+
+在 PKH110 的 Chrome PWA 通过 ADB / CDP 检查：外屏竖屏 `350×772`、内屏竖屏 `691×730`、内屏横屏 `763×658`（CSS px）。使用 device-state 临时覆盖切换显示屏，旋转使用系统方向设置；完成后恢复原状态。
+
+- 旧宿主内屏头部改为单行：团队、子智能体、后台任务使用紧凑图标入口，保留原按钮的 ARIA 名称、点击行为和完整原生面板；隐藏纯展示的 PTC 模式文字，视图标签与工具按钮同排。内屏竖屏 header 从约 `111px` 降到 `55px`，横屏约 `51px`，正文释放约 `56px`。空 `conversation.header.leading` slot 不占外屏标题位置；有实际内容的扩展点保留。
+- 收紧任务条内边距、输入卡间隙、工具行与统计行：内屏底部由约 `222px` 降到 `178px`；主要输入和任务按钮保留 `44px` 触控高度。外屏统计条保持完整信息并可横向滚动。
+- 折叠 / 旋转视口稳定后，头部、正文与输入区使用 `240ms` 淡入；键盘聚焦、浮层打开与 `prefers-reduced-motion` 时跳过，视口和网格几何即时更新。尺寸更新复用已探测的 DOM；结构变更与显式 `refresh()` 才重探测，头部尺寸由 ResizeObserver 更新。该过渡发生在浏览器完成尺寸切换后，系统和宿主自身的旋转渲染耗时仍会影响流畅度。
+- 手机 header 的“下载 Session 日志 / 反馈”菜单改用不透明主题背景，避免聊天文字穿透；反馈表单保留宿主弹窗交互。
+- 实测内屏键盘视口约 `691×419` / `763×372`。补充窗口高度差判断，旋转导致旧 baseline 被覆盖后仍可识别键盘；低高度键盘态收起 actions / tabs / 任务条 / 用量条，并解除宿主 header 最小高度。
+- 外屏设置弹窗保持视口内，侧栏 drawer / 右栏沿用原生开关与状态。
+- 本轮未覆盖真实大屏停靠、所有输入法、中文组合输入和全部手势；下方完整清单继续作为升级回归项。
+
+### 开发更新与缓存
+
+两个 mobile chunks 的 immutable URL 共用 Client 入口 revision。修改 chunks 时同步更新 `lib/client.js` 的 skin 版本注释，使宿主更新入口 revision。Plugin Manager 返回 `application: applied` 后刷新真机，确认 `getState().version` 与实际样式；旧 revision 的浏览器缓存可通过 `device.mjs reload` 单次绕过，无需清理站点存储或重新配对。
 
 ## OPPO Find N5 手工检查
 

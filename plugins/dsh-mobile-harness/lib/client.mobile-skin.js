@@ -2,7 +2,7 @@ globalThis.__ModuleLoader__.load({
   id: 'dsh-mobile-harness',
   chunk: 'client.mobile-skin.js',
   factory() {
-const MOBILE_SKIN_VERSION = '2.1.0'
+const MOBILE_SKIN_VERSION = '2.2.3'
 
 const EDGE_SWIPE_ZONE = 64
 const MOBILE_QUERY = '(max-width: 640px), (any-pointer: coarse) and (max-width: 1366px)'
@@ -126,19 +126,40 @@ function installNavFold() {
     window.clearInterval(timer)
     bar.remove()
     document.querySelector('nav[class*="_panelList"]')?.classList.remove('dru-nav-folded')
+    document.getElementById(styleId)?.remove()
   }
+}
+
+/** Native responsive shell shipped in 0.2.2-rc.1; compare numeric version components. */
+function hasNativeMobileLayout(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([^+]+))?(?:\+.*)?$/.exec(String(version ?? ''))
+  if (!match) return false
+  const target = [0, 2, 2]
+  for (let index = 0; index < target.length; index += 1) {
+    const part = Number(match[index + 1])
+    if (part !== target[index]) return part > target[index]
+  }
+  const candidate = /^rc\.(\d+)(?:\.|$)/.exec(match[4] ?? '')
+  return !match[4] || Boolean(candidate && Number(candidate[1]) >= 1)
 }
 
 function installMobileSkin(css) {
   if (typeof css !== 'string' || !css) throw new Error('Mobile stylesheet unavailable')
   const query = window.matchMedia(MOBILE_QUERY)
+  const hostVersion = globalThis.__DSH_BOOT__?.release?.version
+  let nativeLayout = hasNativeMobileLayout(hostVersion)
   let activeSkin = null
   let navFold = null
+  let nativeProbe = null
   const sync = () => {
-    // The gateway decides the layout per device and stamps it on <html>, so an explicit
-    // phone/tablet choice wins over the CSS width; 'compat' keeps the fixed desktop canvas.
+    // Unversioned custom builds can publish the native drawer after plugin activation.
+    if (!nativeLayout) {
+      const frame = document.querySelector('[data-sidebar-drawer]')
+      nativeLayout = Boolean(frame?.querySelector('[data-sidebar-mask]') && frame.querySelector('[data-sidebar-opener]'))
+    }
+    if (nativeLayout) nativeProbe?.disconnect()
     const forced = forcedUiMode()
-    const want = forced ? forced !== 'compat' : !compatCanvas() && query.matches
+    const want = !nativeLayout && (forced ? forced !== 'compat' : !compatCanvas() && query.matches)
     if (want && !activeSkin) {
       activeSkin = setupMobileSkin(css)
       navFold = installNavFold()
@@ -151,14 +172,25 @@ function installMobileSkin(css) {
   }
   const diagnostics = {
     version: MOBILE_SKIN_VERSION,
-    getState: () => activeSkin?.getState() ?? { active: false, layout: 'desktop', version: MOBILE_SKIN_VERSION },
-    refresh: () => activeSkin?.refresh()
+    getState: () => activeSkin?.getState() ?? {
+      active: false,
+      layout: compatCanvas() ? 'compat' : nativeLayout ? 'native' : 'desktop',
+      compatibility: nativeLayout ? 'native' : 'inactive',
+      hostVersion: hostVersion ?? null,
+      version: MOBILE_SKIN_VERSION
+    },
+    refresh: () => { sync(); activeSkin?.refresh() }
   }
   globalThis.__dshMobileSkin = diagnostics
   query.addEventListener('change', sync)
+  if (!/^\d+\.\d+\.\d+(?:[-+]|$)/.test(hostVersion ?? '')) {
+    nativeProbe = new MutationObserver(sync)
+    nativeProbe.observe(document.body, { childList: true, subtree: true })
+  }
   sync()
   return () => {
     query.removeEventListener('change', sync)
+    nativeProbe?.disconnect()
     navFold?.()
     navFold = null
     activeSkin?.dispose()
@@ -192,6 +224,17 @@ function setupMobileSkin(css) {
   let warningTimer = 0
   let focusTimer = 0
   let syncCount = 0
+  let portalsDirty = true
+  let probeDirty = true
+  let headerHeight = null
+  let postureWidth = window.innerWidth
+  let postureLandscape = window.innerWidth > window.innerHeight
+  let postureTimer = 0
+  let posturePending = false
+  let previousVisualWidth = window.innerWidth
+  let previousVisualHeight = window.innerHeight
+  let postureAnimations = []
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)')
   let missing = []
   let lastMissing = ''
   let overlay = null
@@ -206,6 +249,7 @@ function setupMobileSkin(css) {
   let currentFrame = null
   let currentCenter = null
   let currentHeader = null
+  let currentConversationRoot = null
 
   const listen = (target, type, listener, options) => {
     target.addEventListener(type, listener, options)
@@ -297,14 +341,26 @@ function setupMobileSkin(css) {
   listen(closeButton, 'click', () => clickAction('closeRightbar'))
   body.appendChild(closeButton)
 
-  const frameWatch = new MutationObserver(() => schedule())
-  const structureWatch = new MutationObserver(() => schedule())
-  const centerWatch = new MutationObserver(() => schedule())
-  const resizeWatch = new ResizeObserver(() => schedule())
-  const portalWatch = new MutationObserver(() => schedule())
-  const bodyWatch = new MutationObserver(() => schedule())
+  const scheduleProbe = () => { probeDirty = true; schedule() }
+  const schedulePortals = () => { portalsDirty = true; schedule() }
+  const frameWatch = new MutationObserver((records) => {
+    if (records.some((record) => record.type === 'childList')) probeDirty = true
+    schedule()
+  })
+  const structureWatch = new MutationObserver(() => { probeDirty = true; schedulePortals() })
+  const centerWatch = new MutationObserver(scheduleProbe)
+  const conversationWatch = new MutationObserver(scheduleProbe)
+  const headerWatch = new MutationObserver(scheduleProbe)
+  const resizeWatch = new ResizeObserver((entries) => {
+    for (const entry of entries) if (entry.target === currentHeader) {
+      headerHeight = Math.round(entry.borderBoxSize?.[0]?.blockSize ?? entry.target.offsetHeight)
+    }
+    schedule()
+  })
+  const portalWatch = new MutationObserver(schedulePortals)
+  const bodyWatch = new MutationObserver(schedulePortals)
   bodyWatch.observe(body, { childList: true })
-  const bootstrapWatch = new MutationObserver(() => schedule())
+  const bootstrapWatch = new MutationObserver(scheduleProbe)
   bootstrapWatch.observe(body, { childList: true, subtree: true })
 
   function schedule() {
@@ -318,13 +374,39 @@ function setupMobileSkin(css) {
     const height = Math.round(visual?.height ?? window.innerHeight)
     const top = Math.max(0, Math.round(visual?.offsetTop ?? 0))
     const focused = Boolean(editableElement(document.activeElement))
+    const landscape = width > window.innerHeight
+    const viewportChanged = width !== previousVisualWidth || height !== previousVisualHeight
+    previousVisualWidth = width
+    previousVisualHeight = height
+    const postureChanged = Math.abs(width - postureWidth) > 64 || (!focused && landscape !== postureLandscape) || ((width > 640) !== (postureWidth > 640))
+    if (postureChanged) {
+      postureWidth = width
+      if (!focused) postureLandscape = landscape
+      posturePending = !focused && !keyboardOpen && !overlay && !reducedMotion.matches
+    }
+    if (viewportChanged && posturePending) {
+      clearTimeout(postureTimer)
+      postureTimer = setTimeout(() => {
+        posturePending = false
+        if (disposed || editableElement(document.activeElement) || keyboardOpen || overlay || reducedMotion.matches) return
+        postureAnimations.forEach((animation) => animation.cancel())
+        postureAnimations = [parts.get('header'), parts.get('chat-scroll'), parts.get('composer')]
+          .filter((element) => element?.isConnected && typeof element.animate === 'function')
+          .map((element) => element.animate([{ opacity: 0.6 }, { opacity: 1 }], { duration: 240, easing: 'ease-out' }))
+      }, 100)
+    }
     if (Math.abs(width - baselineWidth) > 64) {
       baselineWidth = width
       baselineHeight = Math.max(height, window.innerHeight)
     }
     if (!focused) baselineHeight = Math.max(baselineHeight, height)
     const gap = Math.max(0, window.innerHeight - height - top)
-    keyboardOpen = focused && (gap > 90 || baselineHeight - height > 130)
+    // resizes-content can erase the baseline on rotation while the keyboard stays open.
+    // Cap the window evidence to the smaller valid bound for split-screen windows.
+    const windowHeights = [window.outerHeight, window.screen?.availHeight].filter((value) => Number.isFinite(value) && value > 0)
+    const windowHeight = windowHeights.length ? Math.min(...windowHeights) : window.innerHeight
+    const windowGap = Math.max(0, windowHeight - height - top)
+    keyboardOpen = focused && (gap > 90 || baselineHeight - height > 130 || windowGap > 160)
     root.classList.toggle('dru-keyboard-open', keyboardOpen)
     setAttribute(root, 'data-dru-layout', width > 640 ? 'expanded' : 'compact')
     setProperty(root, '--dru-vh', `${height}px`)
@@ -334,6 +416,7 @@ function setupMobileSkin(css) {
 
   function bindShell(frame, center, header) {
     if (currentFrame !== frame) {
+      portalsDirty = true
       frameWatch.disconnect()
       structureWatch.disconnect()
       currentFrame = frame
@@ -354,11 +437,22 @@ function setupMobileSkin(css) {
       currentCenter = center
       if (center) centerWatch.observe(center, { childList: true })
     }
+    const conversationRoot = header?.parentElement ?? null
+    if (currentConversationRoot !== conversationRoot) {
+      conversationWatch.disconnect()
+      currentConversationRoot = conversationRoot
+      if (conversationRoot) conversationWatch.observe(conversationRoot, { childList: true })
+    }
     if (currentHeader !== header) {
+      headerHeight = null
+      headerWatch.disconnect()
       resizeWatch.disconnect()
       currentHeader = header
       if (frame) resizeWatch.observe(frame)
-      if (header) resizeWatch.observe(header)
+      if (header) {
+        resizeWatch.observe(header)
+        headerWatch.observe(header, { childList: true, subtree: true })
+      }
     }
   }
 
@@ -402,6 +496,7 @@ function setupMobileSkin(css) {
       portalWatch.observe(child, { childList: true, subtree: true })
     }
     for (const dialog of document.querySelectorAll('[role="dialog"]')) {
+      if (dialog.getAttribute('data-shortcut-modal') === 'sidebar') continue
       const nav = [...dialog.children].find((child) => child.tagName === 'NAV')
       if (!nav) continue
       mark(dialog, 'settings-dialog')
@@ -433,6 +528,10 @@ function setupMobileSkin(css) {
     closeButton.hidden = next !== 'rightbar'
     const center = parts.get('center')
     if (next && !previous) {
+      clearTimeout(postureTimer)
+      posturePending = false
+      postureAnimations.forEach((animation) => animation.cancel())
+      postureAnimations = []
       focusReturn = document.activeElement
       centerWasInert = Boolean(center?.inert)
       if (center) center.inert = true
@@ -462,7 +561,12 @@ function setupMobileSkin(css) {
     if (disposed) return
     syncCount += 1
     updateViewport()
-    const { template, width } = probe()
+    if (probeDirty) {
+      probeDirty = false
+      probe()
+    }
+    const template = parts.get('frame')?.style.getPropertyValue('grid-template-columns') ?? ''
+    const width = root.clientWidth
     const sidebarWidth = Number(template.match(/^\s*([\d.]+)px/)?.[1] ?? 0)
     const pixelValues = [...template.matchAll(/([\d.]+)px/g)]
     const rightWidth = Number(pixelValues.at(-1)?.[1] ?? 0)
@@ -474,14 +578,18 @@ function setupMobileSkin(css) {
     root.classList.toggle('dru-sidebar-docked', docked)
     root.classList.toggle('dru-right-open', rightOpen)
     launcher.hidden = !ready || width > 640
-    launcher.disabled = !findAction('openSidebar')
+    if (!launcher.hidden) launcher.disabled = !findAction('openSidebar')
     launcher.setAttribute('aria-expanded', String(drawerOpen))
     if (!rightOpen && drawerOpen && !docked) syncOverlay('sidebar')
     else if (rightOpen) syncOverlay('rightbar')
     else syncOverlay(null)
     const header = parts.get('header')
-    if (header) setProperty(root, '--dru-header-height', `${Math.round(header.getBoundingClientRect().bottom)}px`)
-    syncPortals()
+    if (header && headerHeight === null) headerHeight = Math.round(header.getBoundingClientRect().height)
+    if (header && headerHeight !== null) setProperty(root, '--dru-header-height', `${headerHeight + Math.max(0, Math.round(window.visualViewport?.offsetTop ?? 0))}px`)
+    if (portalsDirty) {
+      portalsDirty = false
+      syncPortals()
+    }
   }
 
   const revealEditable = () => {
@@ -492,6 +600,13 @@ function setupMobileSkin(css) {
     const bottom = (visual?.offsetTop ?? 0) + (visual?.height ?? window.innerHeight)
     if (bounds.bottom > bottom - 12 || bounds.top < (visual?.offsetTop ?? 0)) editable.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' })
   }
+  listen(reducedMotion, 'change', () => {
+    if (!reducedMotion.matches) return
+    clearTimeout(postureTimer)
+    posturePending = false
+    postureAnimations.forEach((animation) => animation.cancel())
+    postureAnimations = []
+  })
   listen(window, 'resize', schedule)
   listen(window, 'orientationchange', schedule)
   if (window.visualViewport) {
@@ -500,7 +615,11 @@ function setupMobileSkin(css) {
   }
   listen(document, 'focusin', (event) => {
     if (!editableElement(event.target)) return
-    schedule()
+    clearTimeout(postureTimer)
+    posturePending = false
+    postureAnimations.forEach((animation) => animation.cancel())
+    postureAnimations = []
+    scheduleProbe()
     clearTimeout(focusTimer)
     focusTimer = setTimeout(revealEditable, 180)
   }, true)
@@ -582,16 +701,20 @@ function setupMobileSkin(css) {
   sync()
 
   return {
-    refresh: schedule,
+    refresh: scheduleProbe,
     getState: () => ({ active: true, version: MOBILE_SKIN_VERSION, layout: root.getAttribute('data-dru-layout'), compatibility: root.getAttribute('data-dru-skin-state'), missing: [...missing], keyboardOpen, overlay, syncCount, viewport: { width: root.clientWidth, height: window.visualViewport?.height ?? window.innerHeight } }),
     dispose() {
       disposed = true
       cancelAnimationFrame(scheduled)
+      clearTimeout(postureTimer)
+      postureAnimations.forEach((animation) => animation.cancel())
       clearTimeout(warningTimer)
       clearTimeout(focusTimer)
       frameWatch.disconnect()
       structureWatch.disconnect()
       centerWatch.disconnect()
+      conversationWatch.disconnect()
+      headerWatch.disconnect()
       resizeWatch.disconnect()
       portalWatch.disconnect()
       bodyWatch.disconnect()

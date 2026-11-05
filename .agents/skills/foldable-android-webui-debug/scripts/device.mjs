@@ -70,6 +70,11 @@ async function main() {
     })`), null, 2))
   } else if (command === 'eval') {
     console.log(JSON.stringify(await evaluate(argument), null, 2))
+  } else if (command === 'reload') {
+    const cdp = await connect()
+    await cdp.send('Page.reload', { ignoreCache: true })
+    cdp.close()
+    console.log('reloaded without browser cache')
   } else if (command === 'shot') {
     if (!argument) throw new Error('usage: device.mjs shot <path>')
     const cdp = await connect()
@@ -97,7 +102,7 @@ async function main() {
       String(Math.round(point.y * metrics.dpr + offset))])
     console.log(`tapped ${argument}`)
   } else {
-    console.log('usage: device.mjs state | eval <expr> | shot <path> | tap <selector>')
+    console.log('usage: device.mjs state | eval <expr> | reload | shot <path> | tap <selector>')
     process.exitCode = 1
   }
 }

@@ -6,9 +6,11 @@ DeepSeek Harness 插件：把「远程访问」做成 DSH 里的一个开关。�
 
 ## Mobile Web UI
 
-插件 `1.2.0` 将 Mobile Web UI 拆为宿主按需加载的 skin 与 CSS chunks。窄屏手机使用紧凑单栏；宽度不超过 `1366px` 的触控设备（含折叠屏展开态）保留 DSH 原生 `64px` 导航 rail，让聊天区利用展开宽度。侧栏在可用宽度达到 `1040px` 时停靠显示，空间较小时使用浮层；右侧工具栏会按手机或展开态宽度调整。
+插件 `1.2.0` 的 mobile skin `2.2.0` 按 DSH 宿主版本分流：`0.2.2-rc.1` 起保留官方原生响应式布局、导航抽屉、设置、输入区 sticky 与软键盘交互，停用旧 skin 的 DOM / CSS / Enter / 浮层接管；远程网关、准入、文件传输和 PWA 保持可用。
 
-OPPO Find N5 展开态是手工检查目标，尚无本机实测结论。键盘、安全区、横屏、抽屉与右栏的行为及检查步骤见 [MOBILE-UI.md](MOBILE-UI.md)。
+旧宿主继续使用插件皮肤：窄屏为紧凑单栏，触控展开态保留 `64px` rail；侧栏在可用宽度达到 `1040px` 时停靠。OPPO Find N5 / PKH110 已在 DSH `0.2.1-rc.5` 完成外屏、内屏竖横屏与键盘布局定向验证。新版通过源码对照与分流测试，升级后的完整真机回归仍需执行。详细范围与步骤见 [MOBILE-UI.md](MOBILE-UI.md)。
+
+Host 上游使用 `webServer.getOrigin()` 的真实 HTTP(S) 地址，兼容 IPv6 与具体监听地址；TLS 上游需证书受系统 / Node 信任（自签 CA 可通过 `NODE_EXTRA_CA_CERTS` 配置），继续校验证书链和主机身份。
 
 ## 安装到主屏幕（PWA）
 

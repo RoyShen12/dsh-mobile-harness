@@ -20,8 +20,7 @@ import { collectLanAddresses, pickLanAddress } from './lan.js'
 import { listPool, saveUpload, openFile, removeFile, ensurePool, MAX_UPLOAD_BYTES, POOL_DIR } from './files.js'
 import { pickFolder, hasNativePicker } from './picker.js'
 import { createServer } from 'node:net'
-import { request as httpRequest } from 'node:http'
-import { request as httpsRequest } from 'node:https'
+import { requestUpstream, resolveUpstreamOrigin } from './upstream.js'
 
 /** @typedef {'disabled'|'starting'|'enabled'|'stopping'|'error'} RemotePhase */
 
@@ -103,8 +102,7 @@ export class RemoteService {
       log: (message) => this.log(message)
     })
     this.proxy = new GatewayProxy({
-      upstreamHost: '127.0.0.1',
-      upstreamPort: 0,
+      getUpstreamOrigin: () => this.webOrigin(),
       getDshCookie: () => this.resolveDshCookie(),
       getUiMode: () => this.state.uiMode,
       // Per-device override (a phone that picked its own layout); null falls back to getUiMode.
@@ -270,19 +268,29 @@ export class RemoteService {
     }
   }
 
+  /** The reachable origin published by the listener, with the older port-only fallback. */
+  webOrigin() {
+    return resolveUpstreamOrigin(this.ctx.webServer)
+  }
+
   /** Resolve DSH's own owner cookie by exchanging this process's launch token. */
   async resolveDshCookie() {
-    const port = this.webPort()
-    if (!port) throw new Error('宿主 Web 服务尚未就绪')
-    const base = `http://127.0.0.1:${port}/`
+    const base = `${this.webOrigin()}/`
     const tokenUrl = this.ctx.connection.authenticatedUrl(base)
-    const response = await fetch(tokenUrl, { redirect: 'manual' })
-    const setCookie = response.headers.get('set-cookie')
-    await response.body?.cancel?.()
-    if (response.status !== 303 || !setCookie) {
-      throw new Error(`无法获取 DSH 会话（HTTP ${response.status}）`)
-    }
-    return setCookie.split(';')[0].trim()
+    return new Promise((resolve, reject) => {
+      const request = requestUpstream(tokenUrl, { agent: false, timeout: 5000 }, (response) => {
+        const setCookie = response.headers['set-cookie']?.[0]
+        response.resume()
+        if (response.statusCode !== 303 || !setCookie) {
+          reject(new Error(`无法获取 DSH 会话（HTTP ${response.statusCode}）`))
+          return
+        }
+        resolve(setCookie.split(';')[0].trim())
+      })
+      request.on('timeout', () => request.destroy(new Error('获取 DSH 会话超时')))
+      request.on('error', reject)
+      request.end()
+    })
   }
 
   /**
@@ -710,15 +718,15 @@ export class RemoteService {
         resolve({ code: 0, error: 'bad-url' })
         return
       }
-      const send = target.protocol === 'https:' ? httpsRequest : httpRequest
-      const req = send(
+      if (!['http:', 'https:'].includes(target.protocol)) {
+        resolve({ code: 0, error: 'bad-protocol' })
+        return
+      }
+      const req = requestUpstream(
+        target,
         {
-          host: target.hostname,
-          port: target.port || (target.protocol === 'https:' ? 443 : 80),
-          path: target.pathname + target.search,
           method: 'GET',
           timeout: timeoutMs,
-          rejectUnauthorized: false,
           headers: { 'user-agent': 'dsh-mobile-harness-selfcheck', 'accept-encoding': 'identity' }
         },
         (res) => {
@@ -744,7 +752,9 @@ export class RemoteService {
     const steps = []
     const add = (id, label, status, detail, hint = null) => steps.push({ id, label, status, detail, hint })
     const port = this.proxy.port ?? this.state.proxyPort ?? null
-    const upstream = this.webPort()
+    let upstream
+    let upstreamError
+    try { upstream = this.webOrigin() } catch (error) { upstreamError = error instanceof Error ? error.message : String(error) }
 
     if (this.phase === 'enabled') add('switch', '总开关', 'ok', '已打开', null)
     else add('switch', '总开关', 'fail', '当前状态：' + this.phase, '打开面板顶部的总开关')
@@ -758,11 +768,11 @@ export class RemoteService {
     }
 
     if (!upstream) {
-      add('upstream', 'DSH 本体', 'fail', '读不到宿主 Web 端口', '重启 DSH')
+      add('upstream', 'DSH 本体', 'fail', upstreamError || '读不到宿主 Web 地址', '检查宿主 Web 监听配置')
     } else {
-      const hit = await this.probeUrl('http://127.0.0.1:' + upstream + '/', 2500)
-      if (hit.code) add('upstream', 'DSH 本体', 'ok', '127.0.0.1:' + upstream + ' 在跑（HTTP ' + hit.code + '）', null)
-      else add('upstream', 'DSH 本体', 'fail', '127.0.0.1:' + upstream + ' 没有响应（' + hit.error + '）', 'DSH 本身没起来')
+      const hit = await this.probeUrl(upstream + '/', 2500)
+      if (hit.code) add('upstream', 'DSH 本体', 'ok', upstream + ' 在跑（HTTP ' + hit.code + '）', null)
+      else add('upstream', 'DSH 本体', 'fail', upstream + ' 没有响应（' + hit.error + '）', '检查宿主监听地址、协议及证书信任')
     }
 
     if (this.state.tunnel === 'external') {
@@ -1212,9 +1222,7 @@ export class RemoteService {
   async enable() {
     this.phase = 'starting'
     this.publicUrl = null
-    const port = this.webPort()
-    if (!port) throw new Error('宿主 Web 服务尚未就绪')
-    this.proxy.options.upstreamPort = port
+    this.webOrigin()
     // LAN entries accept connections on every interface (Wi-Fi, and virtual LANs such as 皎月连 or
     // ZeroTier); every other entry keeps the listener on loopback and reaches it through its tunnel.
     const host = this.state.tunnel === 'lan' ? '0.0.0.0' : '127.0.0.1'

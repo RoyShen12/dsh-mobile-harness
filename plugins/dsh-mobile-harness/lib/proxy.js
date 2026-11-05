@@ -12,6 +12,8 @@ import https from 'node:https'
 import net from 'node:net'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { injectPwa, servePwa } from './pwa.js'
+import { connectUpstream, parseUpstreamOrigin, requestUpstream } from './upstream.js'
+import { hasNativeMobileLayout, readHostRelease } from './ui-compat.js'
 
 const SESSION_COOKIE = 'dsh-gw'
 
@@ -112,15 +114,7 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[<>&"']/g, (ch) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' })[ch])
 }
 
-/**
- * DSH's web frontend ships a desktop-only layout: its stylesheet has no width breakpoint, so a
- * 360-430px phone viewport squeezes the sidebar and the conversation pane until controls sit
- * off-screen and the page stops scrolling. A DOM-level patch would break on every frontend
- * upgrade, so the fix sits at the one boundary we control: the HTML navigation response. A phone
- * gets a fixed desktop viewport width, so every control lays out exactly as it does on a desktop
- * and the browser scales the result down to fit; desktop browsers are served untouched.
- */
-/** Phone and tablet user agents; both need the fixed-width viewport because the frontend has no breakpoints. */
+/** User-agent matching selects a device's gateway preference, not the host's UI generation. */
 const PHONE_UA = /Android.*Mobile|iPhone|iPod|Opera Mini|IEMobile|Mobile|HarmonyOS|Windows Phone/i
 /** Checked first: an iPad in desktop mode still says "Mobile", and Android tablets omit it entirely. */
 const TABLET_UA = /iPad|Tablet|Macintosh.*Mobile|Android(?!.*Mobile)|MatePad|SM-T\d|Pad$/i
@@ -144,10 +138,7 @@ export function resolveUiMode(mode, userAgent) {
   return 'compat'
 }
 
-/**
- * Rewrite the viewport of a navigation response so a phone lays out on a fixed desktop canvas
- * instead of squeezing the desktop-only layout into 390px.
- */
+/** Preserve native host viewport behavior; older hosts use the legacy skin's keyboard resize policy. */
 export function injectViewport(html, mode) {
   let text = String(html)
   if (mode === 'phone' || mode === 'tablet') {
@@ -155,8 +146,12 @@ export function injectViewport(html, mode) {
     // scaling a fixed 1280 canvas down is exactly what made text unreadably small. `data-dru-ui`
     // tells the page which layout the gateway chose, so the skin never has to re-guess it.
     text = text.replace(/<html([^>]*)>/i, '<html$1 data-dru-ui="' + mode + '">')
-    const native = '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content, user-scalable=yes" />'
     const found = /<meta[^>]*\bname=["']viewport["'][^>]*>/i
+    if (hasNativeMobileLayout(readHostRelease(text))) {
+      // The new host owns keyboard resize, zoom, safe areas, and native navigation.
+      return found.test(text) ? text : text.replace(/<head[^>]*>/i, (tag) => tag + '<meta name="viewport" content="width=device-width, initial-scale=1" />')
+    }
+    const native = '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content, user-scalable=yes" />'
     return found.test(text) ? text.replace(found, native) : text.replace(/<head[^>]*>/i, (tag) => tag + native)
   }
   // compat: the pre-skin behaviour — a fixed desktop canvas the phone scales down. It is the
@@ -910,7 +905,10 @@ export class GatewayProxy {
   }
 
   upstreamOrigin() {
-    return `http://${this.options.upstreamHost}:${this.options.upstreamPort}`
+    if (this.options.getUpstreamOrigin) return parseUpstreamOrigin(this.options.getUpstreamOrigin()).origin
+    const host = this.options.upstreamHost || '127.0.0.1'
+    const authority = net.isIP(host) === 6 ? `[${host}]` : host
+    return parseUpstreamOrigin(`http://${authority}:${this.options.upstreamPort}`).origin
   }
 
   beginDeviceRequest(token, isPoll) {
@@ -1697,7 +1695,7 @@ export class GatewayProxy {
   }
 
   upstreamHeaders(req) {
-    const authority = `${this.options.upstreamHost}:${this.options.upstreamPort}`
+    const authority = parseUpstreamOrigin(this.upstreamOrigin()).authority
     const headers = { ...req.headers, host: authority, cookie: this.dshCookie, 'x-dsh-mobile-remote': '1' }
     delete headers['x-forwarded-host']
     delete headers['x-forwarded-proto']
@@ -1846,10 +1844,9 @@ export class GatewayProxy {
   }
   proxyRequest(req, res, device, attempt = 0) {
     const retryable = attempt === 0 && (req.method === 'GET' || req.method === 'HEAD')
-    const upstream = http.request(
+    const upstream = requestUpstream(
+      this.upstreamOrigin(),
       {
-        host: this.options.upstreamHost,
-        port: this.options.upstreamPort,
         method: req.method,
         path: req.url,
         headers: this.upstreamHeaders(req),
@@ -2012,7 +2009,7 @@ export class GatewayProxy {
 
   /** Relays a WebSocket handshake, refreshing the DSH cookie once if upstream answers 401/403. */
   connectUpgrade(req, socket, release, attempt) {
-    const upstreamSocket = net.connect(this.options.upstreamPort, this.options.upstreamHost, () => {
+    const upstreamSocket = connectUpstream(this.upstreamOrigin(), () => {
       const headers = this.upstreamHeaders(req)
       const lines = [`${req.method} ${req.url} HTTP/1.1`]
       for (const [name, value] of Object.entries(headers)) {

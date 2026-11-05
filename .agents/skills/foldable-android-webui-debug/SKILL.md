@@ -9,14 +9,14 @@ description: 在折叠屏安卓真机上调试 DSH Web UI 时使用，涵盖内�
 
 ## 基本流程
 
-1. 改完仓库代码并本地验证后，运行 `scripts/update-plugin.sh`，然后退出并重开 `/Applications/DeepSeek Harness.app`。
-2. 手机刷新页面，确认 `window.__dshMobileSkin.getState()` 的 `compatibility` 为 `ready`，并确认注入的样式包含本次改动。
+1. 改完仓库代码并本地验证后，先读 `../deploy-dsh-plugin/SKILL.md`，取得本次插件重载许可后通过 Plugin Manager 重装，依据 `application` 判断是否生效。仅在管理器要求重启且用户明确允许时重启 DSH。
+2. 手机刷新页面，确认 `window.__dshMobileSkin.getState()` 的版本、`compatibility: ready` 和注入样式均匹配本次改动。只改 sibling chunks 时需同步更新 `lib/client.js` 的版本注释以推进入口 revision；旧 immutable URL 可能命中浏览器缓存，可用 `device.mjs reload` 绕过一次缓存。
 3. 折叠/展开切换后刷新一次页面。页面是在另一块屏的尺寸下加载的，不刷新会拿到过期的布局状态。
 4. 用 `scripts/device.mjs` 读状态、截图、按选择器点击；不要手算坐标。
 
 ## 关键限制
 
-- 插件前端 chunk 的 rev 在 DSH 启动时固定，改文件不重启不会生效。直接拷进 `~/.dsh/profiles/desktop/node_modules` 也不算完成更新，`update-plugin.sh` 会做 rsync、pnpm relink 和逐字节校验。
+- 插件前端 sibling chunks 的 rev 跟随 Client 入口；只改 chunks 会继续使用旧 immutable URL。同步推进入口后通过 Plugin Manager 重装，并核对真机实际版本。外部脚本同步流程见部署技能。
 - 重启线上 DSH 前需要用户明确同意。重启后手机页面必须刷新。
 - 页面的 `innerHeight` 不含 Chrome 工具栏，`adb input` 用的是整块屏幕的物理坐标。坐标必须用 `screen.height * devicePixelRatio - innerHeight * devicePixelRatio` 换算；写死某个方向的高度在折叠或旋转后必错。
 - `adb input` 默认发往默认显示。折叠后先确认哪块屏是 `state=ON`，必要时用 `input -d`。
@@ -41,7 +41,7 @@ description: 在折叠屏安卓真机上调试 DSH Web UI 时使用，涵盖内�
 
 每轮检查：横向溢出、头部按钮右边界、侧栏固定区占比、会话区可用高度、输入框是否被键盘遮挡、返回键与边缘滑动、设置弹窗宽度。
 
-用 CDP 注入新 CSS 可以在不重启的情况下验收样式；JS 逻辑改动无法热替换，必须走更新加重启。
+用 CDP 注入新 CSS 可以临时验收样式；JS 逻辑改动需要走 Plugin Manager 重装并刷新页面。`0.2.2-rc.1` 起原生分支诊断为 `active:false, compatibility:native`，旧版分支应为 `active:true, compatibility:ready`。
 
 ## 脚本
 
@@ -49,6 +49,7 @@ description: 在折叠屏安卓真机上调试 DSH Web UI 时使用，涵盖内�
 
 ```bash
 node .agents/skills/foldable-android-webui-debug/scripts/device.mjs state
+node .agents/skills/foldable-android-webui-debug/scripts/device.mjs reload # 绕过一次浏览器缓存
 node .agents/skills/foldable-android-webui-debug/scripts/device.mjs eval 'window.__dshMobileSkin.getState()'
 node .agents/skills/foldable-android-webui-debug/scripts/device.mjs shot /tmp/s.png
 node .agents/skills/foldable-android-webui-debug/scripts/device.mjs tap 'button[aria-label="打开侧边栏"]'

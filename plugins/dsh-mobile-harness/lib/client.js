@@ -1283,9 +1283,9 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
             const entryOptions = [['lan', '局域网 / 虚拟组网'], ['external', 'SakuraFrp / 外部'], ['quick', 'Cloudflare'], ['none', '仅本机'], ['tailscale', 'Tailscale']]
             const uiModeOptions = [['auto', '自动'], ['phone', '手机'], ['tablet', '平板'], ['compat', '兼容']]
             const uiModeTips = {
-              auto: '按设备识别：手机→原生手机版，平板→桌面版，其他→兼容版。认错设备时手动锁一档。',
-              phone: '原生手机版：真手机字号，侧栏变抽屉、设置改全屏。手机上首选这一档。',
-              tablet: '平板用桌面布局，按真实宽度铺满、不缩放。8 寸以上选它。',
+              auto: '按设备选择真实宽度。DSH 0.2.2-rc.1 起使用官方手机 / 平板适配，旧版使用插件皮肤；认错设备时可手动选择。',
+              phone: '使用手机真实宽度。新版 DSH 保留官方导航、设置和软键盘交互，旧版启用插件手机皮肤。',
+              tablet: '使用平板 / 折叠屏真实宽度，不缩放。新版 DSH 由官方布局自适应，旧版使用插件展开布局。',
               compat: '把 1280 宽桌面页整体缩小塞进屏幕：最保真，但字最小，只作兜底。',
               default: '跟随电脑上设的默认模式；选其它值只改变这一台设备。'
             }
@@ -2246,6 +2246,7 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
           }
           let disposed = false
           let dispose
+          // Skin 2.2.3: native hosts own layout; legacy mobile defers posture animation until resize settles.
           Promise.all([
             require.async('./client.mobile-skin.js'),
             require.async('./client.mobile-styles.js')

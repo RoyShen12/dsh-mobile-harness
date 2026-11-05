@@ -2,6 +2,21 @@
 
 ## 未发布
 
+- mobile skin `2.2.3`：修复“下载 Session 日志 / 反馈”菜单在手机上透出正文；减少切屏 resize 时重复 DOM 探测，布局稳定后对头部、正文和输入区做短暂淡入，并尊重减少动态效果设置。
+
+- mobile skin `2.2.2`：收紧任务条、输入卡片和用量栏，保留输入与任务主操作的 44px 触控区域；Find N5 内屏底部由约 222px 减至 178px，外屏统计横向可滚动。
+- 折叠和方向切换时减少重复 portal 扫描与头部测量，并为头部加入 180ms 淡入；键盘态和减少动态效果偏好不播放过渡。
+
+- mobile skin `2.2.1`：旧宿主折叠屏内屏 session 顶栏改为单行紧凑入口，header 约 111px → 55px；团队、子智能体、后台任务及视图菜单保留原生交互，释放正文高度。新版 DSH 原生 UI 分支保持不变。
+
+- mobile skin `2.2.0` 增加宿主分代：DSH `0.2.2-rc.1` 起使用官方原生响应式 UI，停用旧 skin、导航折叠、全局 Enter 和浮层接管；远程 phone / tablet 档保留新版宿主 viewport，兼容档仍为 1280px 画布。
+- Host 上游改用 `webServer.getOrigin()`，兼容具体监听地址、IPv6 和 HTTPS，cookie 引导、HTTP、WebSocket 及自检统一协议与证书验证；旧版仅端口接口继续回退到 HTTP loopback。
+- 声明 `@deepseek-ai/dsh-tools` peer，适配新版对外部 `link:` 插件的宿主依赖解析。增加 UI 分流及上游 HTTP(S) / WebSocket 定向兼容测试。
+
+- Mobile skin `2.1.1`：折叠屏内屏 `641–900px` 的标题与原生操作分两行排列，操作保持单行横向滚动；外屏忽略空导航 slot，释放标题宽度。
+- 修复旋转 / 折叠后软键盘状态丢失，以及键盘态宿主最小头部高度挤占消息区的问题；停靠侧栏同时打开右栏时保留遮罩关闭入口。
+- 真机调试脚本增加 `reload`（绕过浏览器缓存），移动 skin 更新时同步 Client 入口 revision，避免 immutable sibling chunk 复用旧缓存。
+
 - 远程网关支持 PWA 安装：独立窗口、192 / 512 图标、maskable 图标及 iOS 主屏幕图标；登录页、等待页和主页面统一提供 manifest 与安装脚本。
 - 远程面板「连接与设备 / 界面」增加安装入口与 iPhone / iPad 操作说明；Service Worker 在导航断网时显示重试页，不缓存聊天、文件或认证内容。
 
