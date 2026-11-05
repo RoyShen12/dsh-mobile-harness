@@ -550,6 +550,50 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
       )
     }
 
+    /** Installation stays browser-owned; the gateway bootstrap captures its install event. */
+    function PwaInstallCard({ hidden }) {
+      const [state, setState] = useState(() => window.__dshPwa?.getState() || null)
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+      useEffect(() => {
+        const update = () => setState(window.__dshPwa?.getState() || null)
+        update()
+        window.addEventListener('dsh-pwa-change', update)
+        return () => window.removeEventListener('dsh-pwa-change', update)
+      }, [])
+
+      const install = async () => {
+        setBusy(true)
+        setError('')
+        try {
+          await window.__dshPwa?.install()
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : String(cause))
+        } finally {
+          setBusy(false)
+        }
+      }
+      const hint = state?.installed
+        ? '已安装到主屏幕。可从图标启动独立窗口。'
+        : !window.isSecureContext
+          ? '请通过 HTTPS 地址访问，并使用受信任的证书，再添加到主屏幕。'
+          : state?.ios
+            ? '在 Safari 中点「分享」→「添加到主屏幕」→「添加」。其他 iPhone 浏览器可先选择「在 Safari 中打开」。'
+            : state?.canPrompt
+              ? '点「安装到主屏幕」，在浏览器提示中确认安装。'
+              : '打开浏览器菜单，选择「安装应用」或「添加到主屏幕」。若菜单未出现该项，请使用最新版 Chrome、Edge 或 Safari。'
+      return h(
+        Card,
+        { title: '添加到主屏幕', desc: '将远程页面安装为独立应用，下次点图标即可打开', hidden },
+        h('p', { className: CLS.cardNote, role: 'status' }, hint),
+        state?.canPrompt && !state.installed
+          ? h('button', { type: 'button', className: CLS.button, disabled: busy, onClick: install }, busy ? '等待浏览器确认…' : '安装到主屏幕')
+          : null,
+        error || state?.error ? h('p', { className: CLS.error }, error || state.error) : null,
+        h('p', { className: CLS.fieldTip }, '使用时需要联网且电脑上的 DSH 保持运行。安装沿用当前地址与设备准入；更换域名或端口后，请从新地址重新添加。')
+      )
+    }
+
     /**
      * 文件传输: this plugin's own pool (lib/files.js), reachable from the phone.
      * The picker is a <label> wrapping the real <input type=file>: a JS .click() on a
@@ -1670,6 +1714,8 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
         ),
 
         h(FilesPanel, { key: 'files', hidden: tab !== 'files', hostView }),
+
+        !hostView ? h(PwaInstallCard, { hidden: tab !== 'ui' && tab !== 'connect' }) : null,
 
         h(
           Card,

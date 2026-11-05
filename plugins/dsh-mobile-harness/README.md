@@ -10,6 +10,16 @@ DeepSeek Harness 插件：把「远程访问」做成 DSH 里的一个开关。�
 
 OPPO Find N5 展开态是手工检查目标，尚无本机实测结论。键盘、安全区、横屏、抽屉与右栏的行为及检查步骤见 [MOBILE-UI.md](MOBILE-UI.md)。
 
+## 安装到主屏幕（PWA）
+
+手机通过 **HTTPS + 受信任证书** 打开网关地址并完成设备准入后，可以直接安装到主屏幕：
+
+- **Android / Chromium**：打开「远程 → 连接与设备」或「界面」，点击「安装到主屏幕」；也可用浏览器菜单的「安装应用 / 添加到主屏幕」。
+- **iPhone / iPad**：在 Safari 点「分享 → 添加到主屏幕 → 添加」。
+- 从主屏幕启动后使用独立窗口，沿用当前网关的登录和准入规则；如果系统为主屏幕应用使用独立存储，首次启动按页面提示重新登录配对。
+- 需要联网且电脑上的 DSH 保持运行；断网导航显示重试页。Service Worker 只处理导航的网络失败，不缓存聊天、文件、API 或登录页面。
+- 安装资源使用固定的 `/__pwa/` 路径，manifest 的启动地址为 `/`，不含二维码票据、密码或会话参数。域名或端口变化后需从新地址重新添加，建议使用稳定的 HTTPS 外部隧道。
+
 ## 安装
 
 ```bash
@@ -22,7 +32,7 @@ dsh plugin --profile desktop add dsh-mobile-harness
 node scripts/install-plugin.mjs --profile desktop   # 写依赖 + bundle 条目，幂等
 ```
 
-装完**重启 DSH**（退出托盘图标再打开），会话侧栏出现「远程」。
+通过当前 DSH 的 Plugin Manager 安装时，启用 HMR 的 profile 可立即加载，按安装结果的 `application` / `nextStep` 操作；会话侧栏出现「远程」。使用旧版宿主或仅在外部脚本中同步文件时，需触发插件重载或按提示重启。
 
 ## 使用
 
@@ -85,6 +95,7 @@ node tools/diagnose.mjs --json   # 机器可读
 | `tools/diagnose.mjs` | 命令行自检：读状态文件 + 探端口 + 比对 SakuraFrp 隧道端口，只读 |
 | `lib/service.js` | 状态机：启停、持久化、状态快照、密码轮换 |
 | `lib/proxy.js` | 本机网关：`/__verify` + 配对码、Cookie 注入、Host/Origin 改写、WS 中继 |
+| `lib/pwa.js` + `lib/pwa/` | 网关 PWA：manifest、安装图标、浏览器安装状态与无缓存离线重试页 |
 | `lib/tailscale.js` | `tailscale status` / `serve` 封装 |
 | `lib/state.js` | `~/.dsh/remote-access/plugin-state.json`（开关、密码、会话密钥、端口） |
 | `lib/qr.js` + `lib/qr-encoder.cjs` | 内置 QR 编码器，宿主输出矩阵、客户端画 SVG |
@@ -105,5 +116,5 @@ node tools/diagnose.mjs --json   # 机器可读
 ## 开发
 
 - 纯 ESM，改完跑 `node --check lib/*.js`；
-- 改 `lib/*.js` 后要同步到 `~/.dsh/profiles/<profile>/node_modules/dsh-mobile-harness/` 并**重启 DSH** 才生效；
+- 推荐通过 Plugin Manager 更新 / 重装，并依据 `application` / `nextStep` 确认生效。当前 DSH HMR 会在 profile 重组时比较已加载文件并替换变化模块，支持插件级热重载；网关重载时远程连接会短暂断开。外部脚本仅同步 / 重链文件未必触发重组，需另行触发插件重载；只有宿主未启用 HMR 或明确返回 `restart-required` 时再安排进程重启；
 - 手机协助 UI 默认隐藏，底层路由与 `phone` 工具仍注册；执行还需本机开启协助、有效设备令牌及 Android 无障碍授权。`SHOW_PHONE_ASSIST` 只控制面板展示。

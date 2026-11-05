@@ -11,6 +11,7 @@ import http from 'node:http'
 import https from 'node:https'
 import net from 'node:net'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { injectPwa, servePwa } from './pwa.js'
 
 const SESSION_COOKIE = 'dsh-gw'
 
@@ -1278,7 +1279,7 @@ export class GatewayProxy {
     const until = expiresAt
       ? escapeHtml(new Date(expiresAt).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }))
       : ''
-    return `<!doctype html><html lang="zh-CN"><head>
+    return injectPwa(`<!doctype html><html lang="zh-CN"><head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <meta name="theme-color" content="#0e1014"/>
@@ -1330,7 +1331,7 @@ export class GatewayProxy {
   setTimeout(poll, 1200);
 })();
 </script>
-</body></html>`
+</body></html>`)
   }
 
   /**
@@ -1528,7 +1529,7 @@ export class GatewayProxy {
   loginPage(notice = '', prefill = '') {
     const safeNotice = String(notice).replace(/[<>&]/g, (ch) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[ch])
     const safePrefill = String(prefill).replace(/"/g, '&quot;').replace(/[<>&]/g, (ch) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[ch])
-    return `<!doctype html><html lang="zh-CN"><head>
+    return injectPwa(`<!doctype html><html lang="zh-CN"><head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <meta name="theme-color" content="#0e1014"/>
@@ -1584,7 +1585,7 @@ export class GatewayProxy {
   });
 })();
 </script>
-</body></html>`
+</body></html>`)
   }
 
   async bind(preferredPort, host = '127.0.0.1') {
@@ -1708,7 +1709,11 @@ export class GatewayProxy {
     delete headers.authorization
     // A navigation may be rewritten on the way back (injectViewport), and a compressed body
     // cannot be rewritten without inflating it first, so ask for identity on navigations only.
-    if (/text\/html/i.test(String(req.headers.accept || ''))) headers['accept-encoding'] = 'identity'
+    if (/text\/html/i.test(String(req.headers.accept || ''))) {
+      headers['accept-encoding'] = 'identity'
+      delete headers['if-none-match']
+      delete headers['if-modified-since']
+    }
     // Everything the gateway forwards came from a phone/tablet or another machine, never from
     // the owner's own DSH window (which talks to the upstream port directly). The panel uses
     // this to hide host-only controls; a client-side spoofed value is overwritten here.
@@ -1763,6 +1768,9 @@ export class GatewayProxy {
         url.searchParams.delete('t')
         req.url = url.pathname + url.search
       }
+
+      // Public install assets contain no device/session data and stay available after login expires.
+      if (servePwa(req, res, path)) return
 
       if (path === '/__verify' || path === '/__verify/status') {
         if (req.method !== 'POST') {
@@ -1889,16 +1897,20 @@ export class GatewayProxy {
           this.uiProbe = { mode: uiMode, at: Date.now(), label: describeUserAgent(ua) }
         }
         const rewriteHtml = req.method === 'GET'
-          && (PHONE_UA.test(ua) || TABLET_UA.test(ua))
           && /text\/html/i.test(String(headers['content-type'] || ''))
           && !headers['content-encoding']
         if (rewriteHtml) {
           const chunks = []
           upstreamRes.on('data', (chunk) => chunks.push(chunk))
           upstreamRes.on('end', () => {
-            const body = Buffer.from(injectViewport(Buffer.concat(chunks).toString('utf8'), uiMode), 'utf8')
-            const outHeaders = { ...headers, 'content-length': String(body.length) }
+            let html = Buffer.concat(chunks).toString('utf8')
+            if (PHONE_UA.test(ua) || TABLET_UA.test(ua)) html = injectViewport(html, uiMode)
+            // Every gateway page can be installed, including an iPad requesting desktop mode.
+            const body = Buffer.from(injectPwa(html), 'utf8')
+            const outHeaders = { ...headers, 'content-length': String(body.length), 'cache-control': 'no-store' }
             delete outHeaders['transfer-encoding']
+            delete outHeaders.etag
+            delete outHeaders['last-modified']
             if (!res.headersSent) res.writeHead(upstreamRes.statusCode ?? 502, outHeaders)
             res.end(body)
           })
