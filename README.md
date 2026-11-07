@@ -67,9 +67,9 @@
 
 ### 网络流量
 
-网关对 JSON / JS / CSS / HTML 等文本响应按 `Accept-Encoding` 压 Brotli 或 gzip，静态资源继续走 immutable 缓存；`/plugins/events` 是 SSE，不再被误标为长缓存。审批浮层改走 15 秒的轻量 `/pending` 长轮询，状态接口带 ETag/304，手机空闲时基本不产生正文流量。
+网关对 JSON / JS / CSS / HTML 等文本响应按 `Accept-Encoding` 压 Brotli 或 gzip，静态资源继续走 immutable 缓存；`/plugins/events` 是 SSE，不再被误标为长缓存，并会按页面 boot revision 跳过重复的初始 graph。审批浮层改走 15 秒的轻量 `/pending` 长轮询，状态接口带 ETag/304，手机空闲时基本不产生正文流量。
 
-真机实测：冷启动 17.8 MB → 3.57 MB（-80%），`/api/session/list` 955 KB → 98 KB，空闲审批轮询从约 12 MB/小时降到接近 0。实现细节、实测方法和仍建议上游 DSH 修改的部分见 [网络传输优化](NETWORK-PERFORMANCE.md)。
+真机实测：冷启动 17.8 MB → 3.47 MB（-80.5%），`/api/session/list` 955 KB → 98 KB，空闲审批轮询从约 12 MB/小时降到接近 0。实现细节、实测方法和仍建议上游 DSH 修改的部分见 [网络传输优化](NETWORK-PERFORMANCE.md)。
 
 ### 安全
 

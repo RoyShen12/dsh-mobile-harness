@@ -22,7 +22,7 @@ import {
   weakenEtag
 } from '../lib/compress.js'
 import { servePwa } from '../lib/pwa.js'
-import { GatewayProxy } from '../lib/proxy.js'
+import { GatewayProxy, createInitialGraphFilter } from '../lib/proxy.js'
 
 const IMMUTABLE = 'public, max-age=31536000, immutable'
 
@@ -169,6 +169,26 @@ test('read cache honours the 5s TTL and the 2 MiB per-entry limit', () => {
   proxy.readCacheSet('large', tooLarge)
   assert.equal(proxy.readCache.has('large'), false)
   assert.ok(MIN_COMPRESS_BYTES < tooLarge.body.length)
+})
+
+test('initial HMR graph matching the boot rev is dropped exactly once', () => {
+  const graphBlock = (rev) => `data: ${JSON.stringify({ type: 'graph', graph: { rev } })}`
+  const accept = createInitialGraphFilter('boot-rev')
+  assert.equal(accept(': connected'), true)
+  assert.equal(accept(graphBlock('boot-rev')), false, 'the boot graph is already in the page')
+  assert.equal(accept(graphBlock('boot-rev')), true, 'only the initial frame is filtered')
+  assert.equal(accept(graphBlock('next-rev')), true)
+  assert.equal(accept(`data: ${JSON.stringify({ type: 'rebuilt', id: 'pkg', rev: 'next' })}`), true)
+  assert.equal(accept('data: not-json'), true)
+
+  const changed = createInitialGraphFilter('boot-rev')
+  assert.equal(changed(graphBlock('next-rev')), true, 'a changed graph still reaches the page')
+
+  // Multi-line data is joined the way the SSE spec reads it.
+  const text = JSON.stringify({ type: 'graph', graph: { rev: 'boot-rev' } })
+  const cut = text.indexOf('"graph"')
+  const multiline = `data: ${text.slice(0, cut)}\ndata: ${text.slice(cut)}`
+  assert.equal(createInitialGraphFilter('boot-rev')(multiline), false)
 })
 
 test('PWA text assets are compressed while no-store stays intact', () => {

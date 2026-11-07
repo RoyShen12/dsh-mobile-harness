@@ -254,6 +254,56 @@ function isEventStream(url, headers = {}) {
   return canonicalPath(queryAt === -1 ? url : url.slice(0, queryAt)) === '/plugins/events'
 }
 
+/**
+ * The boot graph revision the page asked the HMR SSE stream to skip. The injected
+ * EventSource wrapper only adds it to `/plugins/events`; every other path is ignored.
+ * @returns {string|null} a bounded revision string, or null when absent/not an SSE path.
+ */
+function requestSseBootRev(req) {
+  if (typeof req?.url !== 'string') return null
+  const queryAt = req.url.indexOf('?')
+  if (queryAt === -1) return null
+  const pathname = canonicalPath(req.url.slice(0, queryAt))
+  if (pathname !== '/plugins/events') return null
+  const rev = new URLSearchParams(req.url.slice(queryAt + 1)).get('gwrev')
+  return typeof rev === 'string' && rev.length > 0 && rev.length <= 128 ? rev : null
+}
+
+/**
+ * SSE graph filter for one HMR connection.
+ *
+ * The page's boot graph already contains the graph the HMR server sends on connect. Dropping
+ * exactly that first frame saves the full graph (tens of KB) per page load; every later graph
+ * and every non-graph frame is forwarded unchanged. The filter is fail-open: malformed or
+ * unexpected blocks pass through.
+ * @param {string} bootRev revision the page was booted with.
+ * @returns {(block: string) => boolean} true when the SSE block should be forwarded.
+ */
+export function createInitialGraphFilter(bootRev) {
+  let sawGraph = false
+  return function accept(block) {
+    const lines = String(block).split(/\r?\n/)
+    let payload = ''
+    for (const line of lines) {
+      if (!line.startsWith('data:')) continue
+      const value = line.slice(5).replace(/^ /, '')
+      payload = payload === '' ? value : payload + '\n' + value
+    }
+    if (payload === '') return true
+    let frame
+    try {
+      frame = JSON.parse(payload)
+    } catch {
+      return true
+    }
+    if (!frame || typeof frame !== 'object' || frame.type !== 'graph') return true
+    const initial = sawGraph === false
+    sawGraph = true
+    const rev = frame.graph && typeof frame.graph === 'object' ? frame.graph.rev : undefined
+    return !(initial && typeof bootRev === 'string' && bootRev.length > 0 && rev === bootRev)
+  }
+}
+
 /** Read-only API POST path (without query), or null when the request is not on the allowlist. */
 function readOnlyPostPath(url) {
   if (typeof url !== 'string') return null
@@ -2292,6 +2342,53 @@ export class GatewayProxy {
     else upstream.end(bodyText)
   }
 
+  /**
+   * Relay an SSE stream while dropping the first graph frame the page already has.
+   * Frames are delimited by a blank line; everything else is written with its original
+   * separator so comments, rebuilt frames and future event types keep their bytes.
+   */
+  relayFilteredEvents(upstreamRes, res, bootRev) {
+    const accept = createInitialGraphFilter(bootRev)
+    upstreamRes.setEncoding('utf8')
+    let buffer = ''
+    const drain = (final) => {
+      for (;;) {
+        const boundary = /\r?\n\r?\n/.exec(buffer)
+        if (boundary === null) break
+        const block = buffer.slice(0, boundary.index)
+        buffer = buffer.slice(boundary.index + boundary[0].length)
+        if (accept(block)) res.write(block + boundary[0])
+      }
+      if (final && buffer !== '') {
+        const tail = buffer
+        buffer = ''
+        res.write(tail)
+      }
+    }
+    upstreamRes.on('data', (chunk) => {
+      buffer += chunk
+      drain(false)
+    })
+    upstreamRes.on('end', () => {
+      drain(true)
+      res.end()
+    })
+    upstreamRes.on('error', () => {
+      try {
+        res.destroy()
+      } catch {
+        /* the client may already be gone */
+      }
+    })
+    res.once('close', () => {
+      try {
+        upstreamRes.destroy()
+      } catch {
+        /* already closed */
+      }
+    })
+  }
+
   handleUpstreamResponse(req, res, device, attempt, upstreamRes) {
     const retryable = attempt === 0 && (req.method === 'GET' || req.method === 'HEAD')
     // The bootstrapped DSH owner cookie can go stale while the switch stays on (e.g. after a
@@ -2357,6 +2454,15 @@ export class GatewayProxy {
         if (!res.headersSent) res.writeHead(status, outHeaders)
         res.end(body)
       })
+      return
+    }
+    // HMR already rendered the same graph into the page; drop that one initial SSE frame.
+    const sseBootRev = status === 200 && /text\/event-stream/i.test(String(headers['content-type'] || ''))
+      ? requestSseBootRev(req)
+      : null
+    if (sseBootRev) {
+      res.writeHead(status, headers)
+      this.relayFilteredEvents(upstreamRes, res, sseBootRev)
       return
     }
     const encoding = this.compressionForRequest(req, status, headers)

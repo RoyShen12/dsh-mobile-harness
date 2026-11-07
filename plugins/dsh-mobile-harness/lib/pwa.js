@@ -17,8 +17,16 @@ html[data-dsh-pwa-android]:not([data-dru-mobile]) [data-sidebar-right-panel="ful
 </style>`
 const DEFAULT_VIEWPORT = '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
 
+/**
+ * Tag `/plugins/events` with the boot graph revision so the gateway can suppress the
+ * duplicate full graph the HMR SSE server sends first. Kept tiny and fail-open: if the
+ * browser refuses the wrapper, or the server is an older gateway, HMR behaves as before.
+ */
+const SSE_REV_BRIDGE = `<script>(function(){var Native=window.EventSource;if(typeof Native!=="function"||window.EventSource.__dshGwBridge)return;function GatewayEventSource(url,options){var href=String(url);try{var clean=href.split("?")[0].split("#")[0];if(clean==="plugins/events"||clean.slice(-15)==="/plugins/events"){var rev=window.__DSH_BOOT__&&window.__DSH_BOOT__.rev;if(typeof rev==="string"&&rev&&href.indexOf("gwrev=")===-1){href+=(href.indexOf("?")===-1?"?":"&")+"gwrev="+encodeURIComponent(rev)}}}catch(_error){}return options===undefined?new Native(href):new Native(href,options)}GatewayEventSource.prototype=Native.prototype;try{Object.setPrototypeOf(GatewayEventSource,Native)}catch(_error){}GatewayEventSource.__dshGwBridge=true;window.EventSource=GatewayEventSource})()</script>`
+
 const HEAD_TAGS = [
   '<script defer src="/__pwa/client.js"></script>',
+  SSE_REV_BRIDGE,
   '<link rel="manifest" href="/__pwa/manifest.webmanifest">',
   '<link rel="apple-touch-icon" sizes="180x180" href="/__pwa/apple-touch-icon.png">',
   '<meta name="theme-color" content="#0e1014">',

@@ -57,6 +57,10 @@ test('PWA head adds cover once, preserving host zoom and keyboard directives and
   assert.ok(result.includes(literal))
   assert.equal(injectPwa(result), result)
   assert.match(result, /apple-mobile-web-app-status-bar-style" content="black-translucent/)
+  // HMR SSE requests carry the boot graph revision; the gateway drops the duplicate graph.
+  assert.match(result, /gwrev=/)
+  assert.match(result, /__dshGwBridge/)
+  assert.equal((result.match(/__dshGwBridge/g) || []).length, 2)
   assert.match(result, /html:not\(\[data-dru-mobile\]\) #root/)
   assert.match(result, /env\(safe-area-inset-bottom,0px\)/)
   assert.match(result, /@media\(display-mode:fullscreen\)[\s\S]*data-dsh-pwa-android.*padding-top:0/)

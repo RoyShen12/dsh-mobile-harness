@@ -2,7 +2,7 @@
 
 ## 未发布
 
-- 网络传输优化：网关新增 HTTP Brotli/gzip 压缩兜底、`/plugins/events` SSE 缓存头修正、只读 RPC 的 5 秒缓存与在途合并（按 `rpcId` 回放）、审批浮层改用 15 秒 `/pending` 长轮询、状态接口 ETag/304 与 3 秒自适应轮询。真机实测冷启动 17.8 MB → 3.57 MB（-80%），`/api/session/list` 955 KB → 98 KB，空闲审批轮询由约 12 MB/小时降至接近 0。详见 [网络传输优化](NETWORK-PERFORMANCE.md)。
+- 网络传输优化：网关新增 HTTP Brotli/gzip 压缩兜底、`/plugins/events` SSE 缓存头修正与 HMR 初始 graph 去重、只读 RPC 的 5 秒缓存与在途合并（按 `rpcId` 回放）、审批浮层改用 15 秒 `/pending` 长轮询、状态接口 ETag/304 与 3 秒自适应轮询。真机实测冷启动 17.8 MB → 3.47 MB（-80.5%），`/api/session/list` 955 KB → 98 KB，空闲审批轮询由约 12 MB/小时降至接近 0。详见 [网络传输优化](NETWORK-PERFORMANCE.md)。
 
 - mobile skin `2.2.3`：修复“下载 Session 日志 / 反馈”菜单在手机上透出正文；减少切屏 resize 时重复 DOM 探测，布局稳定后对头部、正文和输入区做短暂淡入，并尊重减少动态效果设置。
 

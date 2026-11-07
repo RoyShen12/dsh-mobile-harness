@@ -68,21 +68,29 @@ wss://<host>/api/remote.mux 101 permessage-deflate
 - 只有内容寻址资源保留 immutable：`/assets/*`、`/plugins/??…&rev=`、`/plugins/<pkg>/client.<hash>.js`、`/plugins/<pkg>/assets/*`。
 - 文本型 PWA 资产（`client.js`、`sw.js`、manifest）也走 br/gzip，但保持 `no-store`。
 
+### 6. HMR SSE 初始 graph 去重
+
+- 页面头部注入一个极小的 `EventSource` 包装，只给 `/plugins/events` 追加 `gwrev=<当前 __DSH_BOOT__.rev>`。
+- 网关按 SSE 事件边界解析；如果连接收到的**第一条** graph 帧与页面 boot rev 相同，说明页面已经渲染过这份 graph，直接丢弃；变更后的 graph、`rebuilt` 帧和注释行原样转发。
+- 实测同一页面：带 `gwrev` 的 SSE 首段只有 13 B（`: connected`），不带 `gwrev` 的对照是 35,203 B；`touch client.js` 后页面仍拿到新的 client bundle revision，HMR 重建路径正常。
+- 降级：旧页面、旧客户端、桌面直连都没有 `gwrev`，网关不启用过滤，行为与之前一致。
+
 ## 实测收益
 
 手机经公网 HTTPS + HTTP/2 入口，ADB + CDP 采样：
 
 | 场景 | 优化前 | 优化后 | 变化 |
 | --- | ---: | ---: | ---: |
-| 强制冷启动（全部资源） | 17,826,499 B | 3,573,031 B | **-80.0%** |
+| 强制冷启动（全部资源） | 17,826,499 B | 3,468,542 B | **-80.5%** |
 | 普通刷新 | 约 1.25 MB | 146,169 B | **-88%** |
 | 首个插件组合 chunk | 7,365,048 B | 1,583,512 B | -78.5% |
-| 第二个插件组合 chunk | 5,887,910 B | 1,199,217 B | -79.6% |
-| `/api/session/list` | 955,472 B | 98,338 B | -89.7% |
-| `/api/settings/describe` 两次合计 | 165,554 B | 19,775 B（上游只打一次） | -88.1% |
+| 第二个插件组合 chunk | 5,887,910 B | 1,198,465 B | -79.6% |
+| `/api/session/list` | 955,472 B | 98,877 B | -89.7% |
+| `/api/settings/describe` 两次合计 | 165,554 B | 19,650 B（上游只打一次） | -88.1% |
 | 空闲 40 s 的审批轮询 | 约 12 MB/h 全量状态 | 3 次 304，0 字节正文 | 几乎为 0 |
+| `/plugins/events` 初始 graph | 105,780 B（4 次连接） | 165 B（3 次连接） | 每次连接约省 26–35 KB |
 
-默认编码统计：冷启动 3.57 MB 中 br 3.46 MB，identity 仅 0.12 MB。插件 revision 更新后的首个刷新会重新取对应 combo（约 1.2–1.35 MB），之后回到 146 KB 的稳态。
+默认编码统计：冷启动 3.47 MB 中 br 3.46 MB，identity 仅 0.012 MB。插件 revision 更新后的首个刷新会重新取对应 combo（约 1.2–1.35 MB），之后回到 146 KB 的稳态。
 
 复现：
 
@@ -99,7 +107,6 @@ node tools/measure-network.mjs --seconds 40
 这些不在 `dsh-mobile-harness` 仓库能控制的范围，已定位到具体代码：
 
 - **首屏 bundle 拆分**：`@deepseek-ai/dsh-client-modules` 的 `compose()` 把所有 application 行按 URL 长度分成两个 combo，`bootInjections()` 对每个 application batch 都发 `script-preload`，`packages/client/web/src/boot.ts` 虽然只 prefetch `immediately` 行，但 `bootClient` 随后仍会 import 全部行。真正按需加载需要按 `immediately` 分层生成 batch，并让非 immediate 插件在首屏挂载后再 `create`。
-- **`/plugins/events` 首次 graph**：每次 SSE 连接发送完整 35 KB graph。可改为客户端带上当前 `rev`，服务端仅在 revision 不同时发送 graph。
 - **`/api/session/list` 体积**：734 个 session 的 `projections` 约 790 KB（`agentTeam` 191 KB、`tokenUsage` 76 KB、`subagentCatalog` 56 KB）。压缩后已降到 98 KB；进一步需要分页或把重型 projection 标记为不在 summary 里下发。
 - **第三方 WebSocket**：`dsh-better-sidebar` 的 `/sidebar/ws/agent-opens` 用 `new WebSocketServer({ noServer: true })`，未开启 `perMessageDeflate`；目前帧很小，收益有限。
 - **心跳频率**：Gateway 默认 `websocketHeartbeatIntervalMs: 2000`，移动网络下可评估放宽到 10–30 s 以减少射频唤醒，但需权衡 NAT/代理空闲断连。
