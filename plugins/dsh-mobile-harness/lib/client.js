@@ -95,6 +95,7 @@ globalThis.__ModuleLoader__.load({
 
     const PANEL_ID = 'remote'
     const STATUS_PATH = '/api/dsh-mobile-harness.status'
+    const PENDING_PATH = '/api/dsh-mobile-harness.pending'
     const TOGGLE_PATH = '/api/dsh-mobile-harness.toggle'
     const PASSWORD_PATH = '/api/dsh-mobile-harness.password'
     const EXTERNAL_PATH = '/api/dsh-mobile-harness.external'
@@ -404,6 +405,225 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
       if (!response.ok && payload === null) throw new Error('HTTP ' + response.status)
       return payload
     }
+
+    // Poll cadence for the full status snapshot: quiet when idle, the old 1 s rhythm while the
+    // switch is moving (or a cloudflared download is running, because its bar must animate).
+    const STATUS_IDLE_MS = 3000
+    const STATUS_BUSY_MS = 1000
+    // The host caps its long poll at 15 s. If the route is not available, fall back to a plain
+    // 5 s GET; either way the overlay never downloads the full status snapshot.
+    const PENDING_WAIT_MS = 15000
+    const PENDING_FALLBACK_MS = 5000
+
+    function statusIsBusy(body) {
+      if (!body) return false
+      if (body.phase === 'starting' || body.phase === 'stopping' || body.busy) return true
+      return Boolean(body.cloudflare && body.cloudflare.downloading)
+    }
+
+    /**
+     * One polling loop with subscribers.
+     *
+     * Both halves of this plugin render the same state: the panel and the frame-wide approval
+     * overlay. A module-level feed gives every mounted component one shared request instead of
+     * one request each, pauses while the page is hidden, and stops completely when the last
+     * subscriber unmounts. `refresh()` forces the next answer (used after an action changed the
+     * state); `push()` plants a snapshot that came back from a POST so the UI updates at once.
+     */
+    function createFeed(spec) {
+      const listeners = new Set()
+      let current = null
+      let lastError = null
+      let timer = null
+      let inflight = null
+      let visibilityBound = false
+
+      const isHidden = () => typeof document !== 'undefined' && document.hidden === true
+      const stopTimer = () => { if (timer !== null) { clearTimeout(timer); timer = null } }
+      const abortInflight = () => {
+        if (!inflight) return
+        const controller = inflight
+        inflight = null
+        controller.abort()
+      }
+      const publish = () => {
+        for (const listener of Array.from(listeners)) {
+          try {
+            listener(current, lastError)
+          } catch {
+            /* a broken subscriber must never stop the shared loop */
+          }
+        }
+      }
+      const schedule = (delay) => {
+        stopTimer()
+        if (listeners.size === 0 || isHidden()) return
+        timer = setTimeout(() => { timer = null; run(false) }, Math.max(0, delay))
+      }
+
+      async function run(force) {
+        if (listeners.size === 0 || isHidden()) return
+        stopTimer()
+        if (inflight) {
+          if (!force) return
+          abortInflight()
+        }
+        const controller = typeof AbortController === 'function' ? new AbortController() : null
+        inflight = controller
+        let next = current
+        let changed = false
+        let error = null
+        try {
+          const result = await spec.load(current, { signal: controller ? controller.signal : undefined, force: Boolean(force) })
+          if (result !== null && result !== undefined) {
+            next = result
+            changed = true
+          }
+        } catch (caught) {
+          if (!(caught && caught.name === 'AbortError')) error = caught
+        } finally {
+          if (inflight === controller) inflight = null
+        }
+        // A forced refresh or hiding aborted this run: the newer owner schedules the next poll.
+        if (listeners.size === 0 || inflight || isHidden()) return
+        if (changed) current = next
+        lastError = error
+        // Publish even on 304: that is how a stale "host unreachable" banner gets cleared.
+        publish()
+        schedule(error ? (spec.errorDelay ?? STATUS_IDLE_MS) : spec.delay(current))
+      }
+
+      const onVisibility = () => {
+        if (isHidden()) {
+          stopTimer()
+          abortInflight()
+          return
+        }
+        run(false)
+      }
+
+      function subscribe(listener) {
+        listeners.add(listener)
+        if (current !== null) listener(current, lastError)
+        if (listeners.size === 1) {
+          if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility)
+          visibilityBound = true
+          run(false)
+        } else if (!inflight && timer === null && !isHidden()) {
+          // A subscriber arrived while the loop was idle (e.g. the previous first one unmounted
+          // between polls): restart it rather than waiting forever.
+          run(false)
+        }
+        return () => {
+          listeners.delete(listener)
+          if (listeners.size > 0) return
+          stopTimer()
+          abortInflight()
+          if (visibilityBound && typeof document !== 'undefined') {
+            document.removeEventListener('visibilitychange', onVisibility)
+            visibilityBound = false
+          }
+        }
+      }
+
+      return {
+        subscribe,
+        refresh: () => { run(true) },
+        push: (body) => {
+          if (!body || typeof body !== 'object') return
+          current = body
+          lastError = null
+          publish()
+        },
+        peek: () => current
+      }
+    }
+
+    /** Conditional GET of the full snapshot: the panel's feed. */
+    function createStatusFeed() {
+      let tag = null
+      const feed = createFeed({
+        load: async (_previous, { signal, force }) => {
+          const headers = force || !tag ? undefined : { 'if-none-match': tag }
+          const response = await fetch(STATUS_PATH, { credentials: 'include', cache: 'no-store', headers, signal })
+          if (response.status === 304) return null
+          if (!response.ok) throw new Error(response.status === 403 ? '请在电脑本机管理远程访问' : 'HTTP ' + response.status)
+          tag = response.headers.get('etag') || tag
+          return response.json()
+        },
+        delay: (body) => (statusIsBusy(body) ? STATUS_BUSY_MS : STATUS_IDLE_MS),
+        errorDelay: STATUS_IDLE_MS
+      })
+      return {
+        subscribe: feed.subscribe,
+        refresh: feed.refresh,
+        // A POST answer carries no ETag, so the next poll must revalidate fully. It is also a
+        // bare service snapshot: merge the per-request fields the status route adds
+        // (view/deviceId/deviceUiMode) from what the panel already rendered, or a remote phone
+        // would briefly treat the host view as its own until the next poll corrects it.
+        push: (body) => {
+          tag = null
+          if (!body || typeof body !== 'object') return feed.push(body)
+          const previous = feed.peek()
+          const merged = { ...body }
+          if (merged.view === undefined) merged.view = previous?.view
+          if (merged.deviceId === undefined) merged.deviceId = previous?.deviceId
+          if (merged.deviceUiMode === undefined) merged.deviceUiMode = previous?.deviceUiMode
+          feed.push(merged)
+        }
+      }
+    }
+
+    /** Long poll of the lightweight pending queue: the approval overlay's feed. */
+    function createPendingFeed() {
+      let tag = null
+      let plain = false
+      let slow = false
+      const feed = createFeed({
+        load: async (_previous, { signal, force }) => {
+          const startedAt = Date.now()
+          const headers = {}
+          if (!force && tag) headers['if-none-match'] = tag
+          const url = PENDING_PATH + (plain ? '' : '?wait=' + PENDING_WAIT_MS)
+          let response
+          try {
+            response = await fetch(url, { credentials: 'include', cache: 'no-store', headers, signal })
+          } catch (error) {
+            // A network failure (not an abort) means the long poll cannot be held here; the
+            // fallback keeps the overlay alive at 5 s instead of retrying in a tight loop.
+            if (!plain) plain = true
+            throw error
+          }
+          if (response.status === 304) {
+            // The route exists (a missing host half answers 404, not 304): return to the real
+            // long poll after any earlier fallback cycle.
+            plain = false
+            slow = Date.now() - startedAt < PENDING_WAIT_MS / 2
+            return null
+          }
+          if (!response.ok) {
+            // 404/403 = an older host half without the route; plain GETs will keep failing, but
+            // the overlay must not hammer the panel route or throw.
+            if (!plain) plain = true
+            throw new Error('HTTP ' + response.status)
+          }
+          const body = await response.json()
+          tag = response.headers.get('etag') || tag
+          slow = false
+          plain = false
+          return body
+        },
+        // A long poll that actually waited re-arms immediately; anything else is the 5 s fallback.
+        delay: () => (plain || slow ? PENDING_FALLBACK_MS : 0),
+        errorDelay: PENDING_FALLBACK_MS
+      })
+      return feed
+    }
+
+    // Module-level singletons: RemotePage and ApprovalOverlay each subscribe to their own feed,
+    // so a second mounted RemotePage adds a subscriber instead of a second status request.
+    const statusFeed = createStatusFeed()
+    const pendingFeed = createPendingFeed()
 
     function downloadJson(filename, data) {
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
@@ -966,32 +1186,13 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
       const localOnly = Boolean(fetchError && /本机管理远程访问|local-only/i.test(fetchError))
       const hostView = !localOnly && status?.view !== 'client'
 
-      const load = async () => {
-        try {
-          const response = await fetch(STATUS_PATH, { credentials: 'include', cache: 'no-store' })
-          if (!response.ok) throw new Error(response.status === 403 ? '请在电脑本机管理远程访问' : 'HTTP ' + response.status)
-          const body = await response.json()
-          setStatus(body)
-          setFetchError(null)
-          return body
-        } catch (error) {
-          setFetchError(error instanceof Error ? error.message : String(error))
-          return null
-        }
-      }
+      // The panel only subscribes while it is mounted: the status request lives in the shared
+      // feed (conditional If-None-Match; idle 3 s / transition 1 s; paused while hidden).
+      useEffect(() => statusFeed.subscribe((body, error) => {
+        if (body) setStatus(body)
+        setFetchError(error ? (error instanceof Error ? error.message : String(error)) : null)
+      }), [])
 
-      useEffect(() => {
-        let alive = true
-        const tick = async () => {
-          if (!alive) return
-          await load()
-        }
-        tick()
-        // 1 s (was 2 s): the cloudflared download bar and the switching state need to move
-        // visibly, and the status route is a loopback round-trip.
-        const timer = setInterval(tick, 1000)
-        return () => { alive = false; clearInterval(timer) }
-      }, [])
 
       // Ask npm once per page load whether a newer release exists. The server caches the answer
       // for six hours, so this is one cheap request even when the panel stays open for days.
@@ -1055,12 +1256,12 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
         setBusy(true)
         try {
           const next = await postJson(TOGGLE_PATH, { enabled: !enabled })
-          if (next && next.phase) setStatus(next)
+          if (next && next.phase) statusFeed.push(next)
         } catch (error) {
           setActionError(error instanceof Error ? error.message : String(error))
         } finally {
           setBusy(false)
-          load()
+          statusFeed.refresh()
         }
       }
 
@@ -1075,14 +1276,14 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
           const next = await postJson(TOGGLE_PATH, { tunnel: mode, enabled: false })
           if (next?.error) setActionError(next.error)
           else if (next && next.phase) {
-            setStatus(next)
+            statusFeed.push(next)
             setSwitchNote('已切到「' + (entryOptions.find((option) => option[0] === mode) || [mode, mode])[1] + '」并自动关掉了开关：检查下面的入口设置，再打开开关。')
           }
         } catch (error) {
           setActionError(error instanceof Error ? error.message : String(error))
         } finally {
           setBusy(false)
-          load()
+          statusFeed.refresh()
         }
       }
 
@@ -1093,14 +1294,14 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
           const next = await postJson(EXTERNAL_PATH, { url: externalDraft ?? status?.externalUrl ?? '' })
           if (next?.error) setActionError(next.error)
           else if (next && next.phase) {
-            setStatus(next)
+            statusFeed.push(next)
             setExternalDraft(null)
           }
         } catch (error) {
           setActionError(error instanceof Error ? error.message : String(error))
         } finally {
           setBusy(false)
-          load()
+          statusFeed.refresh()
         }
       }
 
@@ -1110,12 +1311,12 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
         try {
           const next = await postJson(RESET_PATH, {})
           if (next?.error) setActionError(next.error)
-          else if (next && next.phase) setStatus(next)
+          else if (next && next.phase) statusFeed.push(next)
         } catch (error) {
           setActionError(error instanceof Error ? error.message : String(error))
         } finally {
           setBusy(false)
-          load()
+          statusFeed.refresh()
         }
       }
 
@@ -1126,14 +1327,14 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
           const next = await postJson(EXTERNAL_PATH, {})
           if (next?.error) setActionError(next.error)
           else if (next && next.phase) {
-            setStatus(next)
+            statusFeed.push(next)
             setExternalDraft(null)
           }
         } catch (error) {
           setActionError(error instanceof Error ? error.message : String(error))
         } finally {
           setBusy(false)
-          load()
+          statusFeed.refresh()
         }
       }
 
@@ -1144,12 +1345,12 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
         try {
           const next = await postJson(CLOUDFLARED_PATH, { action })
           if (next?.error) setActionError(next.error)
-          else if (next && next.phase) setStatus(next)
+          else if (next && next.phase) statusFeed.push(next)
         } catch (error) {
           setActionError(error instanceof Error ? error.message : String(error))
         } finally {
           setBusy(false)
-          load()
+          statusFeed.refresh()
         }
       }
 
@@ -1161,12 +1362,12 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
         try {
           const next = await postJson(LAN_PATH, { address })
           if (next?.error) setActionError(next.error)
-          else if (next && next.phase) setStatus(next)
+          else if (next && next.phase) statusFeed.push(next)
         } catch (error) {
           setActionError(error instanceof Error ? error.message : String(error))
         } finally {
           setBusy(false)
-          load()
+          statusFeed.refresh()
         }
       }
 
@@ -1180,12 +1381,12 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
         try {
           const next = await postJson(UI_PATH, deviceId ? { mode, deviceId } : { mode })
           if (next?.error) setActionError(next.error)
-          else if (next && next.phase) setStatus(next)
+          else if (next && next.phase) statusFeed.push(next)
         } catch (error) {
           setActionError(error instanceof Error ? error.message : String(error))
         } finally {
           setBusy(false)
-          load()
+          statusFeed.refresh()
         }
       }
 
@@ -1230,12 +1431,12 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
           if (result?.error) throw new Error(result.error)
           setPassword('')
           setReveal(false)
-          if (result && result.snapshot) setStatus(result.snapshot)
+          if (result && result.snapshot) statusFeed.push(result.snapshot)
         } catch (error) {
           setActionError(error instanceof Error ? error.message : String(error))
         } finally {
           setBusy(false)
-          load()
+          statusFeed.refresh()
         }
       }
 
@@ -1255,12 +1456,12 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
         try {
           const next = await postJson(DEVICES_PATH, payload)
           if (next?.error) setActionError(next.error)
-          else if (next && next.phase) setStatus(next)
+          else if (next && next.phase) statusFeed.push(next)
         } catch (error) {
           setActionError(error instanceof Error ? error.message : String(error))
         } finally {
           setBusy(false)
-          load()
+          statusFeed.refresh()
         }
       }
 
@@ -2133,47 +2334,27 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
      *
      * A device that needs approval must be answered from the desktop, and the user may be looking
      * at any panel — so this lives in `shell.overlay` (the frame's own overlay seat) instead of in
-     * the remote panel. It polls the same status route as the panel, shows the pairing code large,
-     * and only sends an approval after the operator confirms the two screens agree.
+     * the remote panel. It long-polls the lightweight pending route (15 s hold, 5 s fallback), never
+     * the full status snapshot the panel already polls, and only sends an approval after the
+     * operator confirms the two screens agree.
      */
-    const OVERLAY_POLL_MS = 1500
     const OVERLAY_SNOOZE_MS = 120000
 
     function ApprovalOverlay() {
-      const [status, setStatus] = useState(null)
+      const [pendingState, setPendingState] = useState(null)
       const [confirmId, setConfirmId] = useState(null)
       const [sending, setSending] = useState(false)
       const [error, setError] = useState(null)
       const [snooze, setSnooze] = useState({})
 
-      const load = async () => {
-        // A hidden window keeps the request pending on the phone; polling it costs nothing but
-        // waking the GPU, so skip it.
-        if (typeof document !== 'undefined' && document.hidden) return
-        try {
-          const response = await fetch(STATUS_PATH, { credentials: 'include', cache: 'no-store' })
-          if (!response.ok) return
-          setStatus(await response.json())
-        } catch {
-          /* the panel already reports an unreachable host; an overlay must never throw */
-        }
-      }
+      // The shared pending feed owns the long poll: one request even when both the panel and the
+      // overlay are mounted, paused while the page is hidden. If the panel is not mounted, this
+      // still works on its own.
+      useEffect(() => pendingFeed.subscribe((body) => {
+        if (body) setPendingState(body)
+      }), [])
 
-      useEffect(() => {
-        let alive = true
-        const tick = () => { if (alive) load() }
-        tick()
-        const timer = setInterval(tick, OVERLAY_POLL_MS)
-        const onVisible = () => { if (!document.hidden) tick() }
-        document.addEventListener('visibilitychange', onVisible)
-        return () => {
-          alive = false
-          clearInterval(timer)
-          document.removeEventListener('visibilitychange', onVisible)
-        }
-      }, [])
-
-      const pending = Array.isArray(status?.pending) ? status.pending : []
+      const pending = Array.isArray(pendingState?.pending) ? pendingState.pending : []
       const queue = pending.filter((entry) => !(snooze[entry.requestId] > Date.now()))
       const active = queue[0] || null
       const now = useNow(Boolean(active), 1000)
@@ -2188,13 +2369,14 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
         try {
           const next = await postJson(DEVICES_PATH, payload)
           if (next?.error) setError(next.error)
-          else if (next && next.phase) setStatus(next)
         } catch (caught) {
           setError(caught instanceof Error ? caught.message : String(caught))
         } finally {
           setSending(false)
           setConfirmId(null)
-          load()
+          // The answer is already in; a forced pending read drops the dialog without waiting for
+          // the next long-poll cycle.
+          pendingFeed.refresh()
         }
       }
       const approve = () => act({ action: 'approve', deviceId: active.deviceId, code: active.pairCode })

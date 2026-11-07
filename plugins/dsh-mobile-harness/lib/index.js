@@ -5,10 +5,11 @@
  * `RemoteService` lifecycle:
  *
  *   GET  /api/dsh-mobile-harness.status    -> snapshot (phase, URL, password, QR matrix, clients…)
+ *   GET  /api/dsh-mobile-harness.pending   -> lightweight approval state (+ ETag/304, ?wait long poll)
  *   POST /api/dsh-mobile-harness.toggle    -> { enabled: boolean }
  *   POST /api/dsh-mobile-harness.password  -> { password?: string } (rotate)
  */
-import { RemoteService, PLUGIN_VERSION } from './service.js'
+import { RemoteService, PLUGIN_VERSION, PENDING_WAIT_MAX_MS, etagFor, ifNoneMatch, pendingResponse } from './service.js'
 import { createPhoneTool } from './phone-tool.js'
 import { contentDisposition } from './files.js'
 import { Readable } from 'node:stream'
@@ -17,6 +18,7 @@ export const name = 'dsh-mobile-harness'
 export const inject = ['webServer', 'connection', 'tools']
 
 export const STATUS_PATH = '/api/dsh-mobile-harness.status'
+export const PENDING_PATH = '/api/dsh-mobile-harness.pending'
 export const TOGGLE_PATH = '/api/dsh-mobile-harness.toggle'
 export const PASSWORD_PATH = '/api/dsh-mobile-harness.password'
 export const EXTERNAL_PATH = '/api/dsh-mobile-harness.external'
@@ -66,6 +68,26 @@ function json(value, status = 200) {
   })
 }
 
+/**
+ * JSON answer with an ETag. `no-cache` keeps the client revalidating: the browser may store the
+ * body, but every use has to ask, which is exactly the conditional request we want.
+ */
+function jsonWithEtag(value, request) {
+  const text = JSON.stringify(value)
+  const etag = etagFor(text)
+  if (ifNoneMatch(request.headers.get('if-none-match'), etag)) {
+    return new Response(null, { status: 304, headers: { 'cache-control': 'no-cache', etag } })
+  }
+  return new Response(text, {
+    status: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-cache',
+      etag
+    }
+  })
+}
+
 function idleSnapshot(message) {
   return {
     pluginVersion: PLUGIN_VERSION,
@@ -101,7 +123,7 @@ export function apply(ctx) {
       // remote phone must read: it carries view=client so the panel hides host-only controls, and
       // it is redacted below. Everything else here is state-changing and stays host-only; the
       // gateway's HOST_ONLY_API list refuses the same POSTs a second time.
-      if (request.headers.get('x-dsh-mobile-remote') && route.path !== STATUS_PATH) {
+      if (request.headers.get('x-dsh-mobile-remote') && route.path !== STATUS_PATH && route.path !== PENDING_PATH) {
         return json({ error: 'local-management-only' }, 403)
       }
       return route.fetch(request)
@@ -155,10 +177,30 @@ export function apply(ctx) {
           // Which device is asking, and the layout it picked for itself (null = default).
           snapshot.deviceId = readDeviceCookie(request)
           snapshot.deviceUiMode = service.deviceUiMode(snapshot.deviceId)
-          return json(snapshot)
+          return jsonWithEtag(snapshot, request)
         }
       }),
     'dsh-mobile-harness: status route'
+  )
+
+  // Lightweight approval feed: the overlay polls this instead of the full status snapshot. It is
+  // readable through the gateway on purpose (a phone renders the same overlay) but redacted;
+  // `?wait=ms` is the optional long poll.
+  ctx.effect(
+    () =>
+      register({
+        path: PENDING_PATH,
+        methods: ['GET'],
+        requestBody: 'buffered',
+        fetch: async (request) => {
+          if (!service) return json(idleSnapshot('远程服务尚未初始化'), 503)
+          const url = new URL(request.url, 'http://dsh.invalid')
+          const asked = Number.parseInt(url.searchParams.get('wait') ?? '', 10)
+          const waitMs = Number.isFinite(asked) && asked > 0 ? Math.min(asked, PENDING_WAIT_MAX_MS) : 0
+          return pendingResponse(service, request, waitMs)
+        }
+      }),
+    'dsh-mobile-harness: pending route'
   )
 
   ctx.effect(

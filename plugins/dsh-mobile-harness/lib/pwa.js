@@ -1,5 +1,6 @@
 /** Public, non-sensitive PWA resources for the gateway. */
 import { readFileSync } from 'node:fs'
+import { compressBuffer, compressionHeaders, isCompressibleType, MIN_COMPRESS_BYTES, negotiateEncoding } from './compress.js'
 
 // Native hosts own their keyboard/navigation layout; inset only their root content box.
 // Legacy skin already applies env(safe-area-inset-*) to its header, rail and composer.
@@ -117,7 +118,18 @@ export function servePwa(req, res, pathname) {
     'x-content-type-options': 'nosniff'
   }
   if (pathname === '/__pwa/sw.js') headers['service-worker-allowed'] = '/'
+  // 文本型 PWA 资产（manifest、service worker、client.js）走与网关相同的压缩兜底，
+  // 但缓存语义保持 no-store：这些文件跟着插件版本走，不能留在浏览器磁盘上。
+  let body = asset.body
+  const encoding = negotiateEncoding(req.headers['accept-encoding'])
+  if (encoding && isCompressibleType(asset.type) && body.length >= MIN_COMPRESS_BYTES) {
+    const compressed = compressBuffer(body, encoding)
+    if (compressed) {
+      body = compressed
+      Object.assign(headers, compressionHeaders(headers, encoding), { 'content-length': String(body.length) })
+    }
+  }
   res.writeHead(200, headers)
-  res.end(req.method === 'HEAD' ? undefined : asset.body)
+  res.end(req.method === 'HEAD' ? undefined : body)
   return true
 }

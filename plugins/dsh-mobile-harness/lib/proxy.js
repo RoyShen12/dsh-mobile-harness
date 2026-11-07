@@ -10,7 +10,8 @@
 import http from 'node:http'
 import https from 'node:https'
 import net from 'node:net'
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { compressBuffer, compressionHeaders, compressionFor, createEncoder, isCompressibleType, mergeVary, negotiateEncoding, weakenEtag } from './compress.js'
 import { injectPwa, servePwa } from './pwa.js'
 import { connectUpstream, parseUpstreamOrigin, requestUpstream } from './upstream.js'
 import { hasNativeMobileLayout, readHostRelease } from './ui-compat.js'
@@ -49,6 +50,32 @@ const MAX_DEVICE_REQUESTS_PER_MINUTE = 120
 const MAX_DEVICE_POLLS = 2
 const AUTH_FAILURE_DELAY_MS = 250
 const MAX_UNKNOWN_BACKOFF_MS = 1000
+/**
+ * Read-only API POSTs that the mobile shell repeats while a page opens. They are safe to
+ * cache briefly and share between concurrent callers because they neither change state nor
+ * depend on the body beyond the parameters it already carries.
+ */
+const READ_ONLY_POST_API = new Set([
+  '/api/settings/describe',
+  '/api/session/modelCatalog',
+  '/api/session/list',
+  '/api/skills/list',
+  '/api/agentPresets/list',
+  '/api/credentials/describe',
+  '/api/commands/list',
+  '/api/permissionPresets/catalog',
+  '/api/account/getProfile',
+  '/api/account/getBalance',
+  '/api/account/getUnnotifiedBonuses',
+  '/api/schedule/catalog'
+])
+/** 5s: long enough to absorb a page's duplicate calls and a quick refresh, short enough to stay fresh. */
+const READ_CACHE_TTL_MS = 5 * 1000
+const READ_CACHE_MAX_ENTRY_BYTES = 2 * 1024 * 1024
+const READ_CACHE_MAX_BYTES = 32 * 1024 * 1024
+const READ_CACHE_MAX_ENTRIES = 64
+/** Hard ceiling while buffering a read response; larger bodies bypass the cache entirely. */
+const READ_BUFFER_MAX_BYTES = 8 * 1024 * 1024
 /** A device without an open page counts as online this long after its last request. */
 const DEVICE_IDLE_TTL_MS = 60000
 /** A device without an open page only counts as online for this long after its last request. */
@@ -219,6 +246,46 @@ function isPluginManagementPath(pathname) {
   return Boolean(path && /^\/api\/dsh-mobile-harness(?:\.|\/|$)/i.test(path))
 }
 
+/** `/plugins/events` is an SSE stream: never cache it, never compress it. */
+function isEventStream(url, headers = {}) {
+  if (/text\/event-stream/i.test(String(headers['content-type'] || ''))) return true
+  if (typeof url !== 'string') return false
+  const queryAt = url.indexOf('?')
+  return canonicalPath(queryAt === -1 ? url : url.slice(0, queryAt)) === '/plugins/events'
+}
+
+/** Read-only API POST path (without query), or null when the request is not on the allowlist. */
+function readOnlyPostPath(url) {
+  if (typeof url !== 'string') return null
+  const queryAt = url.indexOf('?')
+  const path = canonicalPath(queryAt === -1 ? url : url.slice(0, queryAt))
+  return path && READ_ONLY_POST_API.has(path) ? path : null
+}
+
+/**
+ * Parse a read-only RPC body. DSH wraps every call in a client-request envelope and gives
+ * every copy a fresh rpcId; the cache key must ignore it or no two calls ever match.
+ * @returns {{method: string, payloadKey: string, rpcId: string|undefined}|null}
+ */
+function parseReadMessage(bodyText) {
+  let message
+  try {
+    message = JSON.parse(bodyText)
+  } catch {
+    return null
+  }
+  if (!message || typeof message !== 'object' || Array.isArray(message)) return null
+  if (typeof message.method !== 'string' || message.method.length === 0 || message.method.length > 256) return null
+  let payloadKey
+  try {
+    payloadKey = JSON.stringify(message.payload === undefined ? null : message.payload)
+  } catch {
+    return null
+  }
+  const rpcId = typeof message.rpcId === 'string' && message.rpcId.length > 0 ? message.rpcId : undefined
+  return { method: message.method, payloadKey, rpcId }
+}
+
 function jsonResponseEnded(res) {
   return res.writableEnded || res.destroyed
 }
@@ -259,6 +326,11 @@ export class GatewayProxy {
     this.unknownFailureWindowAt = 0
     this.unknownFailureCount = 0
     this.ticketClaim = null
+    /** Read-only POST replay cache: key -> { payload, expiresAt, size }. */
+    this.readCache = new Map()
+    this.readCacheBytes = 0
+    /** In-flight read-only POSTs: key -> Promise<payload>, shared by concurrent callers. */
+    this.inflightReads = new Map()
   }
 
   /** What the gateway resolved for the most recent phone/tablet navigation (null = none yet). */
@@ -464,19 +536,37 @@ export class GatewayProxy {
   }
 
   /**
-   * Long-lived caching for content-addressed assets. DSH's static files carry a content
+   * Long-lived caching for content-addressed assets only. DSH's static files carry a content
    * hash in their names, so a phone that already loaded them should never fetch them again
-   * over a slow relay link.
-   * @param {string} path request path (without query string)
+   * over a slow relay link. `/plugins/events` is a stream and plain plugin paths are not
+   * versioned, so neither may be cached.
+   * @param {string} requestUrl request path + query string
    * @param {number|undefined} status upstream status
    * @returns {string|null}
    */
-  cachePolicy(path, status) {
+  cachePolicy(requestUrl, status) {
     if (status !== 200) return null
-    const normalized = canonicalPath(path)
+    const raw = typeof requestUrl === 'string' ? requestUrl : '/'
+    const queryAt = raw.indexOf('?')
+    const pathname = queryAt === -1 ? raw : raw.slice(0, queryAt)
+    const search = queryAt === -1 ? '' : raw.slice(queryAt + 1)
+    const normalized = canonicalPath(pathname)
     if (!normalized) return null
-    if (/^\/(assets|plugins)\//.test(normalized)) return 'public, max-age=31536000, immutable'
     if (normalized === '/manifest.webmanifest' || normalized === '/favicon.svg') return 'public, max-age=86400'
+    if (/^\/assets\/./.test(normalized)) return 'public, max-age=31536000, immutable'
+    if (!/^\/plugins\//.test(normalized)) return null
+    if (/^\/plugins\/events(?:\/|$)/i.test(normalized)) return null
+    // `/plugins/??<ids>&rev=<hash>`: the host's client-module combo, versioned by rev.
+    if (normalized === '/plugins/' && new URLSearchParams(search).has('rev')) {
+      return 'public, max-age=31536000, immutable'
+    }
+    // `/plugins/<pkg>/client.<hash>.js` and `/plugins/<pkg>/assets/<file>`: content-addressed.
+    if (/^\/plugins\/[^/]+\/client\.[0-9a-zA-Z_-]{6,}\.js$/.test(normalized)) {
+      return 'public, max-age=31536000, immutable'
+    }
+    if (/^\/plugins\/[^/]+\/assets\/./.test(normalized)) {
+      return 'public, max-age=31536000, immutable'
+    }
     return null
   }
 
@@ -1714,10 +1804,19 @@ export class GatewayProxy {
       delete headers['if-none-match']
       delete headers['if-modified-since']
     }
+    // DSH will enable gzip upstream. The gateway owns content negotiation (br preferred,
+    // gzip fallback), so ask the upstream for identity; otherwise it compresses to gzip
+    // first and that is all we could relay. A client that accepts nothing keeps its value.
+    if (negotiateEncoding(req.headers['accept-encoding'])) headers['accept-encoding'] = 'identity'
     // Everything the gateway forwards came from a phone/tablet or another machine, never from
     // the owner's own DSH window (which talks to the upstream port directly). The panel uses
     // this to hide host-only controls; a client-side spoofed value is overwritten here.
     headers['x-dsh-panel-view'] = 'client'
+    // Compressed responses carry a weak ETag (W/"…"), but DSH compares validators strongly.
+    // Strip the weakness marker before the conditional request reaches the upstream so a
+    // phone that cached a compressed body still gets its 304.
+    const ifNoneMatch = headers['if-none-match']
+    if (typeof ifNoneMatch === 'string') headers['if-none-match'] = ifNoneMatch.replace(/(^|[\s,])W\//g, '$1')
     // The browser's own cookies never reach DSH — the owner cookie replaces them — so the device
     // identity travels in a header the gateway owns. Strip first: a phone must not be able to
     // claim another device id by sending the header itself.
@@ -1732,6 +1831,302 @@ export class GatewayProxy {
       headers['x-dsh-device-id'] = forwardedDevice
     }
     return headers
+  }
+
+  /**
+   * Headers shared by every upstream response before body handling: content-addressed cache
+   * policy, SSE no-cache markers, and Vary for representations that may be compressed.
+   */
+  responseHeaders(req, status, headers) {
+    let out = headers
+    const cacheControl = this.cachePolicy(req.url ?? '/', status)
+    if (cacheControl && req.method !== 'POST') out = { ...out, 'cache-control': cacheControl }
+    if (isEventStream(req.url, out)) {
+      out = { ...out, 'cache-control': 'no-cache, no-transform', 'x-accel-buffering': 'no' }
+    } else if (status === 200 && !out['content-encoding'] && isCompressibleType(out['content-type'])) {
+      // Even an identity answer depends on Accept-Encoding: advertise it so an intermediary
+      // never hands a compressed body to a client that cannot read it.
+      out = { ...out, vary: mergeVary(out.vary) }
+    }
+    // A conditional request for a compressed representation sends W/"…" but DSH compares
+    // strongly; keep the 304's validator weak so the stored entry still matches.
+    if (status === 304 && out.etag !== undefined) out = { ...out, etag: weakenEtag(out.etag) }
+    return out
+  }
+
+  /**
+   * Whether this upstream response may be compressed for this request. SSE, HEAD, partial
+   * and already-encoded bodies are all excluded by the shared policy in compress.js.
+   */
+  compressionForRequest(req, status, headers) {
+    if (isEventStream(req.url, headers)) return null
+    return compressionFor(req.headers['accept-encoding'], {
+      method: req.method,
+      status,
+      contentType: headers['content-type'],
+      contentEncoding: headers['content-encoding'],
+      contentRange: headers['content-range'],
+      cacheControl: headers['cache-control'],
+      contentLength: headers['content-length']
+    })
+  }
+
+  /** Cache key: HTTP method + URL + RPC method + payload; rpcId is deliberately excluded. */
+  readCacheKey(req, meta) {
+    return createHash('sha256')
+      .update(String(req.method || 'POST'))
+      .update('\n')
+      .update(String(req.url || '/'))
+      .update('\n')
+      .update(meta.method)
+      .update('\n')
+      .update(meta.payloadKey)
+      .digest('base64url')
+  }
+
+  pruneReadCache(now = Date.now()) {
+    for (const [key, entry] of this.readCache) {
+      if (entry.expiresAt <= now) {
+        this.readCache.delete(key)
+        this.readCacheBytes -= entry.size
+      }
+    }
+  }
+
+  readCacheGet(key, now = Date.now()) {
+    const entry = this.readCache.get(key)
+    if (!entry) return null
+    if (entry.expiresAt <= now) {
+      this.readCache.delete(key)
+      this.readCacheBytes -= entry.size
+      return null
+    }
+    // Refresh LRU order: Map preserves insertion order.
+    this.readCache.delete(key)
+    this.readCache.set(key, entry)
+    return entry
+  }
+
+  readCacheSet(key, payload) {
+    if (!Buffer.isBuffer(payload?.body) || payload.body.length > READ_CACHE_MAX_ENTRY_BYTES) return
+    const now = Date.now()
+    this.pruneReadCache(now)
+    const previous = this.readCache.get(key)
+    if (previous) {
+      this.readCache.delete(key)
+      this.readCacheBytes -= previous.size
+    }
+    const entry = { payload, expiresAt: now + READ_CACHE_TTL_MS, size: payload.body.length }
+    this.readCache.set(key, entry)
+    this.readCacheBytes += entry.size
+    while (this.readCache.size > READ_CACHE_MAX_ENTRIES || this.readCacheBytes > READ_CACHE_MAX_BYTES) {
+      const oldest = this.readCache.keys().next().value
+      if (oldest === undefined || oldest === key) break
+      const dropped = this.readCache.get(oldest)
+      this.readCache.delete(oldest)
+      this.readCacheBytes -= dropped.size
+    }
+  }
+
+  /**
+   * Read-only API POSTs: cache the full upstream response briefly and share one in-flight
+   * request between concurrent callers. The phone shell repeats the same describe/catalog
+   * calls when a page opens (hundreds of milliseconds apart), so pure in-flight merging
+   * misses most of them and a short TTL also kills the repeated reload traffic.
+   */
+  async readOnlyPost(req, res, device) {
+    let bodyText
+    try {
+      bodyText = await this.readBody(req, res)
+    } catch (error) {
+      this.options.log?.(`gateway read body failed: ${String(error?.message || error)}`)
+      if (!jsonResponseEnded(res)) this.sendJson(res, 502, { ok: false, code: 'upstream' })
+      return
+    }
+    if (bodyText === null) return // readBody already answered with 413
+    const meta = parseReadMessage(bodyText)
+    if (!meta) {
+      // Not an RPC envelope: never cache or merge; forward the consumed body as-is.
+      this.sendUpstream(req, res, device, 0, bodyText)
+      return
+    }
+    const key = this.readCacheKey(req, meta)
+    const cached = this.readCacheGet(key)
+    if (cached) {
+      this.replayRead(req, res, device, cached.payload, meta.rpcId)
+      return
+    }
+    let pending = this.inflightReads.get(key)
+    if (!pending) {
+      pending = this.fetchRead(req, bodyText)
+      this.inflightReads.set(key, pending)
+      pending.finally(() => {
+        if (this.inflightReads.get(key) === pending) this.inflightReads.delete(key)
+      }).catch(() => {})
+    }
+    const payload = await pending
+    if (payload.cacheable) this.readCacheSet(key, payload)
+    this.replayRead(req, res, device, payload, meta.rpcId)
+  }
+
+  /**
+   * Fetch one read-only POST, refreshing a stale DSH owner cookie once on 401/403 exactly like
+   * the normal proxy path. Never rejects; every failure becomes a 502/504 payload.
+   */
+  async fetchRead(req, bodyText, attempt = 0) {
+    const payload = await this.fetchReadOnce(req, bodyText)
+    if (attempt === 0 && (payload.status === 401 || payload.status === 403)) {
+      let cookie = null
+      try {
+        cookie = await this.options.getDshCookie?.()
+      } catch {
+        cookie = null
+      }
+      if (cookie && cookie !== this.dshCookie) {
+        this.dshCookie = cookie
+        this.options.log?.('gateway: refreshed DSH session after upstream 401, retrying read post')
+        return this.fetchRead(req, bodyText, 1)
+      }
+    }
+    return payload
+  }
+
+  /** One upstream attempt for a buffered read; the response body is always identity. */
+  fetchReadOnce(req, bodyText) {
+    return new Promise((resolve) => {
+      let settled = false
+      const finish = (payload) => {
+        if (settled) return
+        settled = true
+        resolve(payload)
+      }
+      const fail = (status, message) => finish({
+        status,
+        headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
+        body: Buffer.from(`${message}\n`, 'utf8'),
+        cacheable: false
+      })
+      const headers = { ...this.upstreamHeaders(req) }
+      // The buffered copy must be identity so each waiter can be served its own encoding.
+      headers['accept-encoding'] = 'identity'
+      headers['content-length'] = String(Buffer.byteLength(bodyText))
+      delete headers['transfer-encoding']
+      let upstream
+      try {
+        upstream = requestUpstream(this.upstreamOrigin(), {
+          method: req.method,
+          path: req.url,
+          headers,
+          agent: false,
+          timeout: 20000
+        }, (upstreamRes) => {
+          const chunks = []
+          let size = 0
+          let overflow = false
+          upstreamRes.on('data', (chunk) => {
+            if (overflow) return
+            size += chunk.length
+            if (size > READ_BUFFER_MAX_BYTES) {
+              overflow = true
+              chunks.length = 0
+              upstreamRes.destroy()
+              fail(502, 'upstream response too large')
+              return
+            }
+            chunks.push(chunk)
+          })
+          upstreamRes.on('end', () => {
+            if (overflow) return
+            const status = upstreamRes.statusCode ?? 502
+            // A cached grant must never be replayed to another request; device cookies are
+            // added per caller in replayRead.
+            const responseHeaders = { ...upstreamRes.headers }
+            delete responseHeaders['set-cookie']
+            const body = Buffer.concat(chunks)
+            const mime = String(responseHeaders['content-type'] || '').split(';')[0].trim().toLowerCase()
+            const isJson = mime === 'application/json' || mime.endsWith('+json')
+            let jsonOk = false
+            if (isJson && status === 200) {
+              try {
+                JSON.parse(body.toString('utf8'))
+                jsonOk = true
+              } catch {
+                jsonOk = false
+              }
+            }
+            finish({
+              status,
+              headers: responseHeaders,
+              body,
+              jsonOk,
+              // Only a JSON RPC envelope can be replayed with another request's rpcId.
+              cacheable: status === 200 && jsonOk && body.length <= READ_CACHE_MAX_ENTRY_BYTES
+            })
+          })
+          upstreamRes.on('error', () => fail(502, 'upstream error'))
+        })
+      } catch {
+        fail(502, 'upstream error')
+        return
+      }
+      upstream.on('socket', (socket) => {
+        try { socket.setNoDelay(true) } catch { /* ignore */ }
+      })
+      upstream.on('timeout', () => {
+        upstream.destroy()
+        fail(504, 'upstream timeout')
+      })
+      upstream.on('error', () => fail(502, 'upstream error'))
+      upstream.end(bodyText)
+    })
+  }
+
+  /**
+   * Replay a buffered read response for one caller. The cached JSON envelope still carries
+   * the leader's rpcId, so swap in this caller's rpcId before compression and serialization.
+   */
+  replayRead(req, res, device, payload, rpcId) {
+    if (jsonResponseEnded(res)) return
+    let headers = { ...payload.headers }
+    delete headers['content-length']
+    delete headers['transfer-encoding']
+    if (device?.isNew) headers = GatewayProxy.withCookie(headers, this.deviceCookieValue(req, device.id))
+    headers = this.responseHeaders(req, payload.status, headers)
+    let body = payload.body
+    if (rpcId !== undefined && payload.jsonOk) {
+      let message = null
+      try {
+        message = JSON.parse(payload.body.toString('utf8'))
+      } catch {
+        message = null
+      }
+      if (message && typeof message === 'object' && !Array.isArray(message)
+        && Object.prototype.hasOwnProperty.call(message, 'rpcId')) {
+        body = Buffer.from(JSON.stringify({ ...message, rpcId }), 'utf8')
+      }
+    }
+    const encoding = this.compressionForRequest(req, payload.status, payload.headers)
+    if (encoding) {
+      const compressed = this.compressPayload(payload, body, encoding, rpcId)
+      if (compressed) {
+        body = compressed
+        headers = compressionHeaders(headers, encoding)
+      }
+    }
+    headers['content-length'] = String(body.length)
+    res.writeHead(payload.status, headers)
+    res.end(body)
+  }
+
+  /** Compress a replayed body once per (encoding, rpcId); identical replays share the bytes. */
+  compressPayload(payload, body, encoding, rpcId) {
+    const key = `${encoding}\u0000${rpcId ?? ''}`
+    if (!payload.compressed) payload.compressed = new Map()
+    if (!payload.compressed.has(key)) {
+      if (payload.compressed.size >= 8) payload.compressed.clear()
+      payload.compressed.set(key, compressBuffer(body, encoding))
+    }
+    return payload.compressed.get(key)
   }
 
   handle(req, res) {
@@ -1845,79 +2240,39 @@ export class GatewayProxy {
     }
   }
   proxyRequest(req, res, device, attempt = 0) {
-    const retryable = attempt === 0 && (req.method === 'GET' || req.method === 'HEAD')
+    // 只读 API POST 走短 TTL 缓存 + 在途合并；其余请求保持原有直通语义。
+    if (attempt === 0 && req.method === 'POST' && readOnlyPostPath(req.url)) {
+      this.readOnlyPost(req, res, device).catch((error) => {
+        this.options.log?.(`gateway read post failed: ${String(error?.message || error)}`)
+        if (!jsonResponseEnded(res)) this.sendJson(res, 502, { ok: false, code: 'upstream' })
+      })
+      return
+    }
+    this.sendUpstream(req, res, device, attempt)
+  }
+
+  /**
+   * Issue one upstream request. `bodyText` is present only when the body was already read
+   * for cache-key inspection; otherwise it streams through untouched.
+   */
+  sendUpstream(req, res, device, attempt, bodyText) {
+    const headers = this.upstreamHeaders(req)
+    if (bodyText !== undefined) {
+      headers['content-length'] = String(Buffer.byteLength(bodyText))
+      delete headers['transfer-encoding']
+    }
     const upstream = requestUpstream(
       this.upstreamOrigin(),
       {
         method: req.method,
         path: req.url,
-        headers: this.upstreamHeaders(req),
+        headers,
         // Never pool upstream sockets: a stale keep-alive socket makes the whole UI hang with no
         // response after DSH restarts or drops idle connections. A fresh loopback connect is cheap.
         agent: false,
         timeout: 20000
       },
-      (upstreamRes) => {
-        // The bootstrapped DSH owner cookie can go stale while the switch stays on (e.g. after a
-        // DSH restart). Refresh it once and replay idempotent requests instead of showing a login page.
-        if (retryable && (upstreamRes.statusCode === 401 || upstreamRes.statusCode === 403)) {
-          upstreamRes.resume()
-          Promise.resolve()
-            .then(() => this.options.getDshCookie?.())
-            .then((cookie) => {
-              if (cookie && cookie !== this.dshCookie) {
-                this.dshCookie = cookie
-                this.options.log?.('gateway: refreshed DSH session after upstream 401, retrying')
-                this.proxyRequest(req, res, device, 1)
-                return
-              }
-              if (!res.headersSent) res.writeHead(502)
-              res.end('dsh session expired\n')
-            })
-            .catch(() => {
-              if (!res.headersSent) res.writeHead(502)
-              res.end('dsh session error\n')
-            })
-          return
-        }
-        let headers = upstreamRes.headers
-        if (device?.isNew) headers = GatewayProxy.withCookie(headers, this.deviceCookieValue(req, device.id))
-        let path = req.url ?? '/'
-        const queryAt = path.indexOf('?')
-        if (queryAt !== -1) path = path.slice(0, queryAt)
-        const cacheControl = this.cachePolicy(path, upstreamRes.statusCode)
-        if (cacheControl && req.method !== 'POST') headers = { ...headers, 'cache-control': cacheControl }
-        const ua = String(req.headers['user-agent'] || '')
-        // A phone that picked its own layout wins over the global default.
-        const uiMode = resolveUiMode(this.options.getDeviceUiMode?.(device?.id) ?? this.options.getUiMode?.(), ua)
-        // Remember what "auto" resolved to on the last phone/tablet navigation, so the panel can
-        // say "this is what auto picks" instead of leaving the owner to guess.
-        if (PHONE_UA.test(ua) || TABLET_UA.test(ua)) {
-          this.uiProbe = { mode: uiMode, at: Date.now(), label: describeUserAgent(ua) }
-        }
-        const rewriteHtml = req.method === 'GET'
-          && /text\/html/i.test(String(headers['content-type'] || ''))
-          && !headers['content-encoding']
-        if (rewriteHtml) {
-          const chunks = []
-          upstreamRes.on('data', (chunk) => chunks.push(chunk))
-          upstreamRes.on('end', () => {
-            let html = Buffer.concat(chunks).toString('utf8')
-            if (PHONE_UA.test(ua) || TABLET_UA.test(ua)) html = injectViewport(html, uiMode)
-            // Every gateway page can be installed, including an iPad requesting desktop mode.
-            const body = Buffer.from(injectPwa(html), 'utf8')
-            const outHeaders = { ...headers, 'content-length': String(body.length), 'cache-control': 'no-store' }
-            delete outHeaders['transfer-encoding']
-            delete outHeaders.etag
-            delete outHeaders['last-modified']
-            if (!res.headersSent) res.writeHead(upstreamRes.statusCode ?? 502, outHeaders)
-            res.end(body)
-          })
-          return
-        }
-        res.writeHead(upstreamRes.statusCode ?? 502, headers)
-        upstreamRes.pipe(res)
-      }
+      (upstreamRes) => this.handleUpstreamResponse(req, res, device, attempt, upstreamRes)
     )
     upstream.on('socket', (socket) => {
       try { socket.setNoDelay(true) } catch { /* ignore */ }
@@ -1933,7 +2288,101 @@ export class GatewayProxy {
       if (!res.headersSent) res.writeHead(502)
       res.end('upstream error\n')
     })
-    req.pipe(upstream)
+    if (bodyText === undefined) req.pipe(upstream)
+    else upstream.end(bodyText)
+  }
+
+  handleUpstreamResponse(req, res, device, attempt, upstreamRes) {
+    const retryable = attempt === 0 && (req.method === 'GET' || req.method === 'HEAD')
+    // The bootstrapped DSH owner cookie can go stale while the switch stays on (e.g. after a
+    // DSH restart). Refresh it once and replay idempotent requests instead of showing a login page.
+    if (retryable && (upstreamRes.statusCode === 401 || upstreamRes.statusCode === 403)) {
+      upstreamRes.resume()
+      Promise.resolve()
+        .then(() => this.options.getDshCookie?.())
+        .then((cookie) => {
+          if (cookie && cookie !== this.dshCookie) {
+            this.dshCookie = cookie
+            this.options.log?.('gateway: refreshed DSH session after upstream 401, retrying')
+            this.proxyRequest(req, res, device, 1)
+            return
+          }
+          if (!res.headersSent) res.writeHead(502)
+          res.end('dsh session expired\n')
+        })
+        .catch(() => {
+          if (!res.headersSent) res.writeHead(502)
+          res.end('dsh session error\n')
+        })
+      return
+    }
+    const status = upstreamRes.statusCode ?? 502
+    let headers = upstreamRes.headers
+    if (device?.isNew) headers = GatewayProxy.withCookie(headers, this.deviceCookieValue(req, device.id))
+    headers = this.responseHeaders(req, status, headers)
+    const ua = String(req.headers['user-agent'] || '')
+    // A phone that picked its own layout wins over the global default.
+    const uiMode = resolveUiMode(this.options.getDeviceUiMode?.(device?.id) ?? this.options.getUiMode?.(), ua)
+    // Remember what "auto" resolved to on the last phone/tablet navigation, so the panel can
+    // say "this is what auto picks" instead of leaving the owner to guess.
+    if (PHONE_UA.test(ua) || TABLET_UA.test(ua)) {
+      this.uiProbe = { mode: uiMode, at: Date.now(), label: describeUserAgent(ua) }
+    }
+    const rewriteHtml = status === 200
+      && req.method === 'GET'
+      && /text\/html/i.test(String(headers['content-type'] || ''))
+      && !headers['content-encoding']
+    if (rewriteHtml) {
+      const chunks = []
+      upstreamRes.on('data', (chunk) => chunks.push(chunk))
+      upstreamRes.on('end', () => {
+        let html = Buffer.concat(chunks).toString('utf8')
+        if (PHONE_UA.test(ua) || TABLET_UA.test(ua)) html = injectViewport(html, uiMode)
+        // Every gateway page can be installed, including an iPad requesting desktop mode.
+        let body = Buffer.from(injectPwa(html), 'utf8')
+        let outHeaders = { ...headers, 'cache-control': 'no-store' }
+        delete outHeaders['transfer-encoding']
+        delete outHeaders.etag
+        delete outHeaders['last-modified']
+        // The rewritten page is buffered, so compress it here instead of streaming.
+        const encoding = this.compressionForRequest(req, status, headers)
+        if (encoding) {
+          const compressed = compressBuffer(body, encoding)
+          if (compressed) {
+            body = compressed
+            outHeaders = compressionHeaders(outHeaders, encoding)
+          }
+        }
+        outHeaders['content-length'] = String(body.length)
+        if (!res.headersSent) res.writeHead(status, outHeaders)
+        res.end(body)
+      })
+      return
+    }
+    const encoding = this.compressionForRequest(req, status, headers)
+    if (encoding) {
+      const encoder = createEncoder(encoding)
+      const abort = () => {
+        try { upstreamRes.destroy() } catch { /* ignore */ }
+        try { encoder.destroy() } catch { /* ignore */ }
+      }
+      res.once('close', () => {
+        if (!res.writableFinished) abort()
+      })
+      encoder.on('error', () => {
+        abort()
+        if (!res.writableFinished) res.destroy()
+      })
+      upstreamRes.on('error', () => {
+        abort()
+        if (!res.writableFinished) res.destroy()
+      })
+      res.writeHead(status, compressionHeaders(headers, encoding))
+      upstreamRes.pipe(encoder).pipe(res)
+      return
+    }
+    res.writeHead(status, headers)
+    upstreamRes.pipe(res)
   }
 
   handleUpgrade(req, socket) {

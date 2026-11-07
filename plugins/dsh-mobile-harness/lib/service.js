@@ -15,7 +15,7 @@ import { findTailscale, readStatus, serveOn80, stopServe80, publicUrlFor } from 
 import { qrMatrix } from './qr.js'
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { collectLanAddresses, pickLanAddress } from './lan.js'
 import { listPool, saveUpload, openFile, removeFile, ensurePool, MAX_UPLOAD_BYTES, POOL_DIR } from './files.js'
 import { pickFolder, hasNativePicker } from './picker.js'
@@ -33,6 +33,140 @@ export const PLUGIN_VERSION = (() => {
     return 'unknown'
   }
 })()
+
+/**
+ * Display-only clock granularity: a `lastSeen` that moves every second would make the panel's
+ * ETag miss on every poll, turning a conditional 304 into a full snapshot forever. The real
+ * registry keeps the exact timestamp; only the values rendered by the UI are rounded.
+ */
+const LAST_SEEN_BUCKET_MS = 10000
+
+export function bucketLastSeen(value) {
+  if (value === null || value === undefined) return value ?? null
+  const ms = Number(value)
+  if (!Number.isFinite(ms) || ms <= 0) return value
+  return Math.floor(ms / LAST_SEEN_BUCKET_MS) * LAST_SEEN_BUCKET_MS
+}
+
+/** The panel renders the last UI-mode probe as "X 分钟前", so a minute bucket is plenty. */
+const UI_PROBE_BUCKET_MS = 60000
+
+export function bucketUiProbe(probe) {
+  if (!probe || typeof probe !== 'object' || probe.at === undefined || probe.at === null) return probe ?? null
+  const ms = Number(probe.at)
+  if (!Number.isFinite(ms) || ms <= 0) return probe
+  return { ...probe, at: Math.floor(ms / UI_PROBE_BUCKET_MS) * UI_PROBE_BUCKET_MS }
+}
+
+/** Long-poll ceiling: the gateway's upstream timeout is 20 s, so 15 s leaves room for the trip. */
+export const PENDING_WAIT_MAX_MS = 15000
+const PENDING_CHECK_MS = 1000
+
+/**
+ * Strong ETag for a serialized body. sha1 over the JSON text is enough for "did this change":
+ * every byte the panel renders is part of the hash, so an unchanged body is a 304.
+ */
+export function etagFor(text) {
+  return '"' + createHash('sha1').update(text).digest('hex') + '"'
+}
+
+/** If-None-Match comparison, tolerant of comma lists and the `W/` weak prefix. */
+export function ifNoneMatch(header, etag) {
+  if (typeof header !== 'string' || header.length === 0) return false
+  if (header.trim() === '*') return true
+  const weak = 'W/' + etag
+  return header.split(',').some((part) => {
+    const value = part.trim()
+    return value === etag || value === weak
+  })
+}
+
+function notModified(etag) {
+  return new Response(null, {
+    status: 304,
+    headers: { 'cache-control': 'no-cache', etag }
+  })
+}
+
+function pendingJson(text, etag) {
+  return new Response(text, {
+    status: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-cache',
+      etag
+    }
+  })
+}
+
+/** Abort-aware sleep used by the long poll. Resolves as soon as `signal` aborts. */
+function sleep(ms, signal) {
+  return new Promise((resolve) => {
+    if (!signal) {
+      setTimeout(resolve, ms)
+      return
+    }
+    if (signal.aborted) {
+      resolve()
+      return
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    function onAbort() {
+      clearTimeout(timer)
+      resolve()
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+/**
+ * The /pending body: one lightweight state read, rendered for this requester.
+ *
+ * A remote phone never sees the pairing codes (same redaction as the status route) and only ever
+ * gets HMAC device references, because pendingState() maps deviceId through managementReferences.
+ */
+function renderPending(service, request) {
+  const state = service.pendingState()
+  const clientView = request.headers.get('x-dsh-panel-view') === 'client'
+    || request.headers.get('x-dsh-mobile-remote') !== null
+  if (clientView && Array.isArray(state.pending)) {
+    state.pending = state.pending.map((entry) => ({ ...entry, pairCode: '' }))
+  }
+  const text = JSON.stringify(state)
+  return { text, etag: etagFor(text) }
+}
+
+/**
+ * Answer GET /pending. A plain request gets the current state (with If-None-Match -> 304).
+ * `?wait=ms` turns it into a long poll: when the caller's tag already matches, we compare the
+ * lightweight state once a second until it changes, the budget expires (304, no body) or the
+ * request is aborted.
+ */
+export async function pendingResponse(service, request, waitMs = 0) {
+  const budget = Number.isFinite(waitMs) && waitMs > 0 ? Math.min(waitMs, PENDING_WAIT_MAX_MS) : 0
+  let current = renderPending(service, request)
+  if (ifNoneMatch(request.headers.get('if-none-match'), current.etag)) {
+    if (budget === 0) return notModified(current.etag)
+  } else {
+    return pendingJson(current.text, current.etag)
+  }
+
+  const deadline = Date.now() + budget
+  const signal = request.signal
+  while (Date.now() < deadline) {
+    if (signal?.aborted) return notModified(current.etag)
+    await sleep(Math.min(PENDING_CHECK_MS, Math.max(1, deadline - Date.now())), signal)
+    if (signal?.aborted) return notModified(current.etag)
+    current = renderPending(service, request)
+    if (!ifNoneMatch(request.headers.get('if-none-match'), current.etag)) {
+      return pendingJson(current.text, current.etag)
+    }
+  }
+  return notModified(current.etag)
+}
 
 /** Numeric semver comparison; pre-release suffixes are ignored, which is enough to spot a real update. */
 export function compareVersions(left, right) {
@@ -645,7 +779,7 @@ export class RemoteService {
         online: onlineIds.has(record.deviceId),
         activeSessions,
         firstSeen: record.firstSeen,
-        lastSeen: Math.max(record.lastSeen ?? 0, sessions.reduce((max, entry) => Math.max(max, entry.lastSeen ?? 0), 0)),
+        lastSeen: bucketLastSeen(Math.max(record.lastSeen ?? 0, sessions.reduce((max, entry) => Math.max(max, entry.lastSeen ?? 0), 0))),
         lastLoginAt: record.lastLoginAt ?? null,
         approvedAt: record.approvedAt ?? null,
         latestId: sessions[0]?.id ?? null
@@ -669,8 +803,8 @@ export class RemoteService {
         online: onlineIds.has(key),
         activeSessions: sessions.filter((entry) => !entry.revoked).length,
         firstSeen: latest?.issuedAt ?? null,
-        lastSeen: latest?.lastSeen ?? null,
-        lastLoginAt: latest?.lastSeen ?? null,
+        lastSeen: bucketLastSeen(latest?.lastSeen ?? null),
+        lastLoginAt: bucketLastSeen(latest?.lastSeen ?? null),
         approvedAt: null,
         latestId: latest?.id ?? null
       })
@@ -970,6 +1104,38 @@ export class RemoteService {
     return value
   }
 
+  /**
+   * Small state for the approval overlay and the phone's pending feed.
+   *
+   * Deliberately just the handful of fields a pending-approval UI needs: the full snapshot is
+   * ~5 KB (labels, audit trail, sessions, QR matrix) and the overlay polls it all day. No side
+   * effects: nothing is refreshed, persisted or kicked off here.
+   */
+  pendingState() {
+    const enabled = this.phase === 'enabled'
+    // The gateway counters only mean something while it runs; skipping them also keeps this
+    // method safe for a disabled service whose proxy has no live socket bookkeeping.
+    return this.managementReferences({
+      phase: this.phase,
+      enabled,
+      busy: this.busy ?? null,
+      devices: enabled ? this.proxy.deviceCount() : 0,
+      pages: enabled ? this.proxy.pageCount() : 0,
+      pending: this.registry.pendingList().map((entry) => ({
+        requestId: entry.requestId,
+        deviceId: entry.deviceId,
+        label: entry.label,
+        client: entry.client,
+        clientVersion: entry.clientVersion,
+        // Needed by the host-side overlay: it shows the pairing code and sends it back with the
+        // approval. The route blanks it for remote clients (same redaction as the status route).
+        pairCode: entry.code || '',
+        createdAt: entry.createdAt,
+        expiresAt: entry.expiresAt
+      }))
+    })
+  }
+
   snapshot() {
     const enabled = this.phase === 'enabled'
     // The relay's real target port only exists in frpc's log, and reading it here (throttled) is what
@@ -1016,7 +1182,7 @@ export class RemoteService {
       filePoolDir: this.fileDir,
       filePoolCustom: Boolean(this.state.filePoolDir),
       // Only meaningful on 'auto': the mode the last phone/tablet request actually got.
-      uiModeProbe: this.state.uiMode === 'auto' ? (this.proxy.uiModeEffective?.() ?? null) : null,
+      uiModeProbe: this.state.uiMode === 'auto' ? bucketUiProbe(this.proxy.uiModeEffective?.() ?? null) : null,
       lastPublicUrl: this.lastPublicUrl,
       qrText,
       qrTicketExpiresAt: enabled && ticket ? (this.proxy.ticketDeadline?.() ?? null) : null,
@@ -1049,7 +1215,7 @@ export class RemoteService {
         client: entry.client === 'app' ? 'app' : 'web',
         clientVersion: entry.clientVersion || '',
         createdAt: entry.issuedAt,
-        lastSeen: entry.lastSeen,
+        lastSeen: bucketLastSeen(entry.lastSeen),
         revoked: Boolean(entry.revoked),
         online: this.sessionOnline(entry.id)
       })),
