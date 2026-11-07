@@ -1284,7 +1284,8 @@ export class GatewayProxy {
 <title>DeepSeek Harness · 等待确认</title>
 <style>
   html,body{margin:0;min-height:100%;background:#0e1014;color:#e8eaee;font-family:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;display:flex;align-items:center;justify-content:center}
-  .card{width:min(92vw,400px);background:#171a21;border:1px solid #2c323d;border-radius:14px;padding:26px 22px;box-shadow:0 18px 60px #0008;text-align:center}
+  body{box-sizing:border-box;min-height:100dvh;padding:max(12px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left))}
+  .card{box-sizing:border-box;width:min(92vw,400px);background:#171a21;border:1px solid #2c323d;border-radius:14px;padding:26px 22px;box-shadow:0 18px 60px #0008;text-align:center}
   h1{font-size:17px;margin:0 0 8px;font-weight:650}
   p{font-size:12px;color:#9aa3b2;margin:0 0 12px;line-height:1.6}
   .code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:32px;font-weight:600;letter-spacing:.22em;color:#e8b339;margin:16px 0 8px}
@@ -1534,7 +1535,8 @@ export class GatewayProxy {
 <title>DeepSeek Harness · 远程访问</title>
 <style>
   html,body{margin:0;height:100%;background:#0e1014;color:#e8eaee;font-family:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;display:flex;align-items:center;justify-content:center}
-  form{width:min(92vw,360px);background:#171a21;border:1px solid #2c323d;border-radius:14px;padding:26px 22px;box-shadow:0 18px 60px #0008}
+  body{box-sizing:border-box;min-height:100dvh;padding:max(12px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left))}
+  form{box-sizing:border-box;width:min(92vw,360px);background:#171a21;border:1px solid #2c323d;border-radius:14px;padding:26px 22px;box-shadow:0 18px 60px #0008}
   h1{font-size:17px;margin:0 0 6px;font-weight:650}
   p{font-size:12px;color:#9aa3b2;margin:0 0 18px;line-height:1.6}
   input{width:100%;box-sizing:border-box;background:#11141a;border:1px solid #2c323d;color:#e8eaee;border-radius:9px;padding:12px 13px;font-size:15px;margin-bottom:12px}

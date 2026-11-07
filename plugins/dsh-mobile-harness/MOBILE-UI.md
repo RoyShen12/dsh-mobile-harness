@@ -10,6 +10,21 @@
 
 `lib/ui-compat.js` 与 Client chunk 各自使用相同的数字版本判据，由 `tools/test-ui-compat.mjs` 核对一致性。旧版结构适配的入口与下列约定继续用于 `0.2.1-rc.5`。
 
+## PWA 沉浸式显示
+
+PWA manifest 优先 `fullscreen` 并显式回退 `standalone`；远程「界面 → 沉浸式显示」使用 `window.__dshPwa` 的本地视图 API。页面全屏只由点击触发，保留进入 / 退出、浏览器错误和 `fullscreenchange` / display-mode 订阅；退出或焦点恢复时不自动请求全屏，无新增 observer、rAF 循环或轮询。
+
+网关 PWA head 保留已选 viewport 的 width / zoom / interactive-widget，仅统一追加 `viewport-fit=cover`。原生宿主根内容盒 `#root` 在旧 skin 未启用时使用 safe-area；Android 实际 fullscreen 时根顶部 padding 为0，避免把整个页面/玻璃背景下移成空行，仅右侧 header corner action 与展开全屏右栏的 mode/close chrome 按顶部 cutout 做局部位移，并用局部定位/z-index保证移动后不被正文截获；左右/底部避让保留。旧 skin 启用后复用其 header / rail / composer insets。iOS 主屏幕以 `black-translucent` 延伸背景到顶部，顶部 inset 绘制固定深色背景提升系统字形可读性；这属于系统状态栏保留时的边到边视觉退路，未承诺 iPhone 状态栏字形消失。
+
+更新需 Host 插件级重载（PWA assets 模块内存驻留）与页面刷新；安装显示模式还需浏览器刷新安装元数据并从主屏幕重开，必要时重新添加图标。官方出处、平台限制与安装更新条件见 [PWA 说明](README.md#沉浸式显示与状态栏)。
+
+待真实平台检查：
+
+- [x] Android 重装后通过已安装PWA launcher入口启动：`display-mode: fullscreen`、API fullscreenElement为空，系统状态栏收起；内外屏root/header顶部0，原33px全页安全区空行消除。直接手点桌面图标及折叠切换连续显示尚未单独测试；右栏关闭控件局部摄像头避让/层叠已通过内外屏可信触摸，按钮中心命中并可关闭。
+- [x] Android 旧 standalone 安装的页面全屏：内外屏触控进入/退出、系统状态栏隐藏、退出保持退出和overlay操作通过；切屏退出API全屏。直接从旧图标启动仍为standalone，安装态更新与自动全屏另列待验收。拒绝请求提示已由定向测试覆盖。
+- [ ] iPhone Safari 主屏幕：竖 / 横屏 black-translucent、安全区、刘海和 Home indicator；记录实际系统字形是否保留。桌面 CDP meta 检查仅证明标记存在。
+- [ ] iPad 支持 Fullscreen API 的浏览器：手势进入 / 退出与旋转，确保顶部 / 底部安全区不重复。
+
 ## 旧宿主布局模式
 
 Skin 在 `(max-width: 640px)` 或 `(any-pointer: coarse) and (max-width: 1366px)` 下启用。小于等于 `640px` 的宽度采用紧凑单栏；触控设备的宽屏 / 折叠屏展开态标记为 `expanded`，保留宿主的 `64px` 导航 rail，不再强制套用手机单栏。

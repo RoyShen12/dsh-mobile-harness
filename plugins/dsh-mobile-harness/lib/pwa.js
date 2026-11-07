@@ -1,6 +1,21 @@
 /** Public, non-sensitive PWA resources for the gateway. */
 import { readFileSync } from 'node:fs'
 
+// Native hosts own their keyboard/navigation layout; inset only their root content box.
+// Legacy skin already applies env(safe-area-inset-*) to its header, rail and composer.
+const SAFE_AREA_STYLE = `<style id="dsh-pwa-safe-area">
+html[data-dsh-pwa-ios] body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:#0e1014;pointer-events:none;z-index:2147483647}
+html:not([data-dru-mobile]) #root{box-sizing:border-box;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
+@media(display-mode:fullscreen){
+html[data-dsh-pwa-android]:not([data-dru-mobile]) #root{padding-top:0}
+/* Keep frame/glass at y=0. Corner chrome moves below the cutout and stays
+   above later-painted body content, so its translated controls remain hit-testable. */
+html[data-dsh-pwa-android]:not([data-dru-mobile]) header[data-window-drag] [class$="_headerCorner"],
+html[data-dsh-pwa-android]:not([data-dru-mobile]) [data-sidebar-right-panel="fullscreen"][data-sidebar-right-open="true"] [class*="_stripChrome_"]:has([data-sidebar-right-toggle]){translate:0 max(0px,calc(env(safe-area-inset-top,0px) - 8px));position:relative;z-index:2}
+}
+</style>`
+const DEFAULT_VIEWPORT = '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
+
 const HEAD_TAGS = [
   '<script defer src="/__pwa/client.js"></script>',
   '<link rel="manifest" href="/__pwa/manifest.webmanifest">',
@@ -9,7 +24,8 @@ const HEAD_TAGS = [
   '<meta name="mobile-web-app-capable" content="yes">',
   '<meta name="apple-mobile-web-app-capable" content="yes">',
   '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">',
-  '<meta name="apple-mobile-web-app-title" content="DSH Remote">'
+  '<meta name="apple-mobile-web-app-title" content="DSH Remote">',
+  SAFE_AREA_STYLE
 ].join('\n')
 
 const META_NAMES = new Set([
@@ -32,7 +48,7 @@ export function injectPwa(html) {
   const text = String(html)
   const head = /(<head\b[^>]*>)([\s\S]*?)(<\/head\s*>)/i
   if (!head.test(text)) {
-    const newHead = '<head>' + HEAD_TAGS + '</head>'
+    const newHead = '<head>' + HEAD_TAGS + DEFAULT_VIEWPORT + '</head>'
     if (/<html\b[^>]*>/i.test(text)) return text.replace(/<html\b[^>]*>/i, (tag) => tag + newHead)
     if (/^\s*<!doctype\b[^>]*>/i.test(text)) return text.replace(/^(\s*<!doctype\b[^>]*>)/i, '$1' + newHead)
     return newHead + text
@@ -40,7 +56,8 @@ export function injectPwa(html) {
   return text.replace(head, (_, opening, content, closing) => {
     if (content.startsWith(HEAD_TAGS)) content = content.slice(HEAD_TAGS.length)
     // Skip comments and complete script bodies so literal HTML inside them remains untouched.
-    const tags = /<!--[\s\S]*?-->|<script\b(?:[^"'<>]|"[^"]*"|'[^']*')*>[\s\S]*?<\/script\s*>|<(?:link|meta)\b(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi
+    const tags = /<!--[\s\S]*?-->|<(script|style)\b(?:[^"'<>]|"[^"]*"|'[^']*')*>[\s\S]*?<\/\1\s*>|<(?:link|meta)\b(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi
+    let hasViewport = false
     const cleaned = content.replace(tags, (tag) => {
       if (tag.startsWith('<!--')) return tag
       const attrs = attributes(tag)
@@ -48,11 +65,25 @@ export function injectPwa(html) {
         const rel = (attrs.rel || '').toLowerCase().split(/\s+/)
         if (rel.includes('manifest') || rel.includes('apple-touch-icon') || rel.includes('apple-touch-icon-precomposed')) return ''
       }
-      if (/^<meta\b/i.test(tag) && META_NAMES.has((attrs.name || '').toLowerCase())) return ''
+      if (/^<meta\b/i.test(tag)) {
+        const name = (attrs.name || '').toLowerCase()
+        if (META_NAMES.has(name)) return ''
+        if (name === 'viewport') {
+          if (hasViewport) return ''
+          hasViewport = true
+          // Preserve width/zoom/interactive-widget policy, adding only edge-to-edge coverage.
+          const viewport = (attrs.content || '').split(',').map((part) => part.trim())
+            .filter((part) => part && !/^viewport-fit\s*=/i.test(part))
+          const value = [...viewport, 'viewport-fit=cover'].join(', ')
+          const escaped = value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+          return `<meta name="viewport" content="${escaped}">`
+        }
+      }
       if (/^<script\b/i.test(tag) && (attrs.src || '').split(/[?#]/)[0] === '/__pwa/client.js') return ''
+      if (/^<style\b/i.test(tag) && attrs.id === 'dsh-pwa-safe-area') return ''
       return tag
     })
-    return opening + HEAD_TAGS + cleaned + closing
+    return opening + HEAD_TAGS + (hasViewport ? '' : DEFAULT_VIEWPORT) + cleaned + closing
   })
 }
 

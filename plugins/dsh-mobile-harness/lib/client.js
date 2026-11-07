@@ -594,6 +594,48 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
       )
     }
 
+    /** Fullscreen is a local view action, requested synchronously from the user's click. */
+    function PwaImmersiveCard({ hidden }) {
+      const [state, setState] = useState(() => window.__dshPwa?.getState() || null)
+      const [busy, setBusy] = useState(false)
+      useEffect(() => {
+        const update = () => setState(window.__dshPwa?.getState() || null)
+        update()
+        window.addEventListener('dsh-pwa-change', update)
+        return () => window.removeEventListener('dsh-pwa-change', update)
+      }, [])
+      const toggle = async () => {
+        setBusy(true)
+        try {
+          if (state?.fullscreen) await window.__dshPwa?.exitFullscreen()
+          else await window.__dshPwa?.enterFullscreen()
+        } finally {
+          setBusy(false)
+        }
+      }
+      const hint = state?.fullscreen
+        ? '当前为页面全屏。点击「退出全屏」，或使用系统返回 / Esc / 浏览器退出手势。'
+        : state?.ios
+          ? 'iPhone / iPad 从主屏幕打开后使用边到边布局和半透明状态栏，时间、电量等由系统保留。支持页面全屏的 iPad 浏览器可点击下方按钮。'
+          : state?.displayMode === 'fullscreen'
+            ? '当前 PWA 以 fullscreen 启动。系统手势可能临时显示状态栏；要结束应用，请使用系统返回或主页。'
+            : state?.installed
+              ? '当前安装仍以 standalone 独立窗口启动，系统状态栏会保留。等待浏览器更新安装信息并重新从图标启动后，再确认 fullscreen；下方按钮只进入本次页面全屏。'
+              : '当前是浏览器页面。从主屏幕安装后请求 fullscreen；下方按钮只进入本次页面全屏，键盘、切换应用或系统手势可能退出。'
+      return h(
+        Card,
+        { title: '沉浸式显示', desc: '减少浏览器与系统栏占用，保留刘海和底部手势安全区', hidden },
+        h('p', { className: CLS.cardNote, role: 'status' }, hint),
+        state?.fullscreen || (state?.fullscreenSupported && state.displayMode !== 'fullscreen')
+          ? h('button', { type: 'button', className: CLS.button, disabled: busy, onClick: toggle }, busy ? '等待浏览器…' : state?.fullscreen ? '退出全屏' : '进入全屏')
+          : null,
+        state && !state.fullscreenSupported && !state.ios && state.displayMode !== 'fullscreen'
+          ? h('p', { className: CLS.fieldTip }, '此浏览器未开放页面全屏，请安装 PWA 后从主屏幕启动。') : null,
+        state?.fullscreenError ? h('p', { className: CLS.error, role: 'alert' }, state.fullscreenError) : null,
+        h('p', { className: CLS.fieldTip }, '全屏权限仅作用于当前页面。已有主屏幕图标可能仍采用旧的独立窗口模式，待浏览器更新安装信息后重开；必要时从同一地址重新添加。')
+      )
+    }
+
     /**
      * 文件传输: this plugin's own pool (lib/files.js), reachable from the phone.
      * The picker is a <label> wrapping the real <input type=file>: a JS .click() on a
@@ -1716,6 +1758,7 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
         h(FilesPanel, { key: 'files', hidden: tab !== 'files', hostView }),
 
         !hostView ? h(PwaInstallCard, { hidden: tab !== 'ui' && tab !== 'connect' }) : null,
+        !hostView ? h(PwaImmersiveCard, { hidden: tab !== 'ui' }) : null,
 
         h(
           Card,

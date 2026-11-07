@@ -22,6 +22,34 @@ Host 上游使用 `webServer.getOrigin()` 的真实 HTTP(S) 地址，兼容 IPv6
 - 需要联网且电脑上的 DSH 保持运行；断网导航显示重试页。Service Worker 只处理导航的网络失败，不缓存聊天、文件、API 或登录页面。
 - 安装资源使用固定的 `/__pwa/` 路径，manifest 的启动地址为 `/`，不含二维码票据、密码或会话参数。域名或端口变化后需从新地址重新添加，建议使用稳定的 HTTPS 外部隧道。
 
+### 沉浸式显示与状态栏
+
+远程端「界面 → 沉浸式显示」提供当前显示模式说明与「进入全屏 / 退出全屏」。这是当前页面的视图操作，无需修改配对、账号或 Host 配置。
+
+- **Android / Chromium**：manifest 使用 `display: fullscreen`，`display_override: ["fullscreen", "standalone"]` 按支持程度回退；从主屏幕启动时请求全屏显示。浏览器页面或旧的 standalone 安装可在用户点击后调用 `document.documentElement.requestFullscreen({ navigationUI: "hide" })`。API 支持与最终系统栏行为由浏览器 / 系统决定；拒绝请求时卡片显示错误，退出后保持退出，刷新、键盘或切换应用后需要再次点击。
+- **iPhone / iPad 主屏幕应用**：使用 `apple-mobile-web-app-status-bar-style=black-translucent` 与 `viewport-fit=cover`。背景延伸到屏幕边缘，状态栏的时间、电量等系统字形仍可能保留；这组 metadata 没有“隐藏系统状态栏”的开关。顶部安全区使用稳定深色背景保证系统字形可读，重要控件避开刘海和 Home indicator。页面全屏入口按实际 API 能力显示；WebKit 官方说明 Safari 16.4 的无前缀 Fullscreen API 覆盖 macOS / iPadOS，iPhone 需以实际浏览器能力为准。
+- **安全区与旧宿主**：保留宿主 viewport 的 width、zoom 和键盘策略，只追加 `viewport-fit=cover`；原生布局在 root 内容盒使用 `env(safe-area-inset-*)`；Android fullscreen 移除 root 顶部 padding，背景铺满顶部，右侧 header corner action 与全屏右栏 mode/close 控件局部避开摄像头 cutout，并保持在正文层上方接受点击，左右/底部避让保留。旧 mobile skin 继续在 header、rail 和 composer 管理安全区，避免重复留白。登录、等待与离线重试页同样避开屏幕边缘。
+- **退出**：API 全屏可在卡片点击「退出全屏」，或用系统返回 / Esc / 浏览器退出手势；manifest 全屏启动的 PWA 由系统返回 / 主页结束。系统边缘手势可以临时唤出系统栏。
+
+#### 更新现有安装
+
+源码静态资源由 Host 模块读取并驻留内存；同步源码后要触发 **插件级重载**，再刷新远程页面，单改磁盘文件只更新下次加载的内容。本修改无需改安装 profile、重置密码或重新配对。Plugin Manager 返回 `application: applied` 后再核对页面；是否需要进程重启以其 `nextStep` 为准。
+
+页面刷新更新 JS / head / Service Worker，已安装 PWA 的显示模式还依赖浏览器更新安装元数据。先完全退出 PWA，再从图标重开，查看卡片模式或 `window.__dshPwa.getState()` 的 `displayMode`；旧图标仍为 `standalone` 时，可先使用点击全屏入口，等待更新，必要时从同一 HTTPS 地址重新安装 / 添加主屏幕。保留站点存储，无需清除登录与配对数据；iOS 主屏幕 metadata 更新也可能需要重新添加图标。
+
+#### 官方依据与验证范围
+
+- [Chrome：display 与 display_override 的含义、支持回退链](https://developer.chrome.com/docs/capabilities/display-override)
+- [Chrome：manifest 与既有 WebAPK 安装元数据更新](https://web.dev/articles/manifest-updates)
+- [WHATWG Fullscreen 标准：用户激活、navigationUI、退出与浏览器最终控制权](https://fullscreen.spec.whatwg.org/)
+- [Apple Safari HTML Reference：black-translucent 内容在状态栏下方延伸，仍受状态栏遮挡](https://developer.apple.com/library/archive/documentation/AppleApplications/Reference/SafariHTMLRef/Articles/MetaTags.html)
+- [WebKit：viewport-fit=cover 与 safe-area-inset 四边避让](https://webkit.org/blog/7929/designing-websites-for-iphone-x/)
+- [WebKit Safari 16.4：Fullscreen API 平台支持范围](https://webkit.org/blog/13966/webkit-features-in-safari-16-4/#fullscreen-api)
+
+Android 折叠机内外屏已验证用户手势的页面全屏：旧 standalone 安装点击进入后系统状态栏隐藏，退出恢复 standalone 且保持退出；切换折叠状态会退出 API 全屏。旧安装原位更新曾未触发，直接从旧图标启动仍为 standalone；重新安装后用户确认系统状态栏已隐藏，内外屏根容器/header顶部0已确认，原整行安全区留白已消除；右栏关闭控件的局部摄像头避让和层叠已通过内外屏触控：按钮位于cutout下方，中心命中按钮，打开/关闭成功。站点存储与配对保持不变。
+
+`node --test tools/test-pwa.mjs tools/test-ui-compat.mjs` 检查 metadata 注入、全屏启动识别、手势、退出与错误路径。桌面 Chromium / CDP 的 meta、模拟 display-mode 或 viewport 检查只验证代码和浏览器状态；真实 iOS 状态栏表现需在主屏幕安装后另行视验，尚未列为完成项。
+
 ## 安装
 
 ```bash
