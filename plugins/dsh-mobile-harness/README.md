@@ -37,19 +37,6 @@ Host 上游使用 `webServer.getOrigin()` 的真实 HTTP(S) 地址，兼容 IPv6
 
 页面刷新更新 JS / head / Service Worker，已安装 PWA 的显示模式还依赖浏览器更新安装元数据。先完全退出 PWA，再从图标重开，查看卡片模式或 `window.__dshPwa.getState()` 的 `displayMode`；旧图标仍为 `standalone` 时，可先使用点击全屏入口，等待更新，必要时从同一 HTTPS 地址重新安装 / 添加主屏幕。保留站点存储，无需清除登录与配对数据；iOS 主屏幕 metadata 更新也可能需要重新添加图标。
 
-#### 官方依据与验证范围
-
-- [Chrome：display 与 display_override 的含义、支持回退链](https://developer.chrome.com/docs/capabilities/display-override)
-- [Chrome：manifest 与既有 WebAPK 安装元数据更新](https://web.dev/articles/manifest-updates)
-- [WHATWG Fullscreen 标准：用户激活、navigationUI、退出与浏览器最终控制权](https://fullscreen.spec.whatwg.org/)
-- [Apple Safari HTML Reference：black-translucent 内容在状态栏下方延伸，仍受状态栏遮挡](https://developer.apple.com/library/archive/documentation/AppleApplications/Reference/SafariHTMLRef/Articles/MetaTags.html)
-- [WebKit：viewport-fit=cover 与 safe-area-inset 四边避让](https://webkit.org/blog/7929/designing-websites-for-iphone-x/)
-- [WebKit Safari 16.4：Fullscreen API 平台支持范围](https://webkit.org/blog/13966/webkit-features-in-safari-16-4/#fullscreen-api)
-
-Android 折叠机内外屏已验证用户手势的页面全屏：旧 standalone 安装点击进入后系统状态栏隐藏，退出恢复 standalone 且保持退出；切换折叠状态会退出 API 全屏。旧安装原位更新曾未触发，直接从旧图标启动仍为 standalone；重新安装后用户确认系统状态栏已隐藏，内外屏根容器/header顶部0已确认，原整行安全区留白已消除；右栏关闭控件的局部摄像头避让和层叠已通过内外屏触控：按钮位于cutout下方，中心命中按钮，打开/关闭成功。站点存储与配对保持不变。
-
-`node --test tools/test-pwa.mjs tools/test-ui-compat.mjs` 检查 metadata 注入、全屏启动识别、手势、退出与错误路径。桌面 Chromium / CDP 的 meta、模拟 display-mode 或 viewport 检查只验证代码和浏览器状态；真实 iOS 状态栏表现需在主屏幕安装后另行视验，尚未列为完成项。
-
 ## 安装
 
 ```bash
@@ -77,9 +64,9 @@ node scripts/install-plugin.mjs --profile desktop   # 写依赖 + bundle 条目�
 | **局域网 / 虚拟组网** | ✅ **推荐（同网段）** | 手机和电脑同一个 Wi-Fi；或两端都连着皎月连 / ZeroTier / Radmin 这类虚拟组网。网关监听所有网卡，面板列出本机每个 IPv4，**点「用这个」可以把二维码钉在指定的那张网卡上**（例如皎月连的 `10.6.22.1`）；不出公网，延迟最低 |
 | **SakuraFrp / 任意外部隧道** | ✅ 推荐（跨网） | 填外网地址（如 `https://frp-cat.com:12345/`）；「自动检测」会读 SakuraFrp 运行日志，并核对隧道本地端口和网关端口。地址稳定 |
 | **Cloudflare 快速隧道** | ✅ 推荐（零准备） | 免账号：插件自己下 `cloudflared`（约 50 MB，带进度条）并建 quick tunnel；地址每次重启都变 |
-| **仅本机** | 本机调试 | 仅回环监听，手机需通过 HTTPS 隧道接入 |
+| **仅本机** | 本机访问 | 仅回环监听，手机需通过 HTTPS 隧道接入 |
 | **Tailscale** | ⚠️ 不推荐 | 能穿 NAT，但常走 DERP 中继，延迟明显偏高；只在内网直连时考虑 |
-| **仅本机** | 🛠 调试用 | 只监听 `127.0.0.1`，手机连不上；本机排查时用 |
+| **仅本机** | 🛠 本机访问用 | 只监听 `127.0.0.1`，手机连不上；本机排查时用 |
 
 ## 手机连不上？先自检
 
