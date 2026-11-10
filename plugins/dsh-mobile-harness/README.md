@@ -49,11 +49,11 @@ dsh plugin --profile desktop add dsh-mobile-harness
 node scripts/install-plugin.mjs --profile desktop   # 写依赖 + bundle 条目，幂等
 ```
 
-通过当前 DSH 的 Plugin Manager 安装时，启用 HMR 的 profile 可立即加载，按安装结果的 `application` / `nextStep` 操作；会话侧栏出现「远程」。使用旧版宿主或仅在外部脚本中同步文件时，需触发插件重载或按提示重启。
+通过当前 DSH 的 Plugin Manager 安装时，启用 HMR 的 profile 可立即加载，按安装结果的 `application` / `nextStep` 操作；会话侧栏的「更多」菜单出现「远程」。使用旧版宿主或仅在外部脚本中同步文件时，需触发插件重载或按提示重启。
 
 ## 使用
 
-1. 侧栏「远程」→ 右上角开关打开。
+1. 侧栏「更多」→「远程」→ 右上角开关打开。
 2. 选网络入口（推荐**外部隧道**或 **Cloudflare**，见下）。
 3. 手机扫码：等待页显示 6 位配对码 → 电脑面板「设备准入」核对同一串 → 点「允许」→「数字一致，允许」。
 
@@ -116,7 +116,7 @@ node tools/diagnose.mjs --json   # 机器可读
 | `lib/tailscale.js` | `tailscale status` / `serve` 封装 |
 | `lib/state.js` | `~/.dsh/remote-access/plugin-state.json`（开关、密码、会话密钥、端口） |
 | `lib/qr.js` + `lib/qr-encoder.cjs` | 内置 QR 编码器，宿主输出矩阵、客户端画 SVG |
-| `lib/client.js` | 浏览器入口：侧栏图标、面板 UI、配对弹窗及 Mobile Web UI chunks 的按需加载 |
+| `lib/client.js` | 浏览器入口：侧栏「更多」菜单行、面板 UI、配对弹窗及 Mobile Web UI chunks 的按需加载 |
 | `lib/client.mobile-skin.js` | Mobile Web UI：DOM 适配、布局 / 面板 / 键盘交互和诊断状态 |
 | `lib/client.mobile-styles.js` | Mobile Web UI：响应式样式、主题 token、安全区与触控布局 |
 | `MOBILE-UI.md` | 宿主 DOM 契约、适配器维护说明与 OPPO Find N5 手工检查清单 |

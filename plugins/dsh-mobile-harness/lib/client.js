@@ -1,14 +1,15 @@
 /**
  * Browser half of the in-app remote-access switch.
  *
- * Registers the sidebar entry ("远程") and the main panel: a switch plus a "小屏幕" that
+ * Registers the 「远程」 row in the sidebar's 「更多」 menu (that row opens the panel) and the
+ * main panel: a switch plus a "小屏幕" that
  * shows the phone URL, an explicitly revealed password, a one-time QR ticket and the
  * live connection count. Management is available through the local DSH connection only.
  *
  * Constraints from the shipped plugin contract:
  *  - plain JS; only `react` / `react-dom` come from the platform seed;
  *  - a slot component must not throw while rendering (it would blank the slot);
- *  - the sidebar entry id and the `main` registration key are the same;
+ *  - the menu row's slot id and the `main` registration key are the same;
  *  - colours use the `--dsw-alias-*` tokens, except the QR which must stay dark-on-light.
  */
 globalThis.__ModuleLoader__.load({
@@ -373,6 +374,13 @@ globalThis.__ModuleLoader__.load({
 .dru-qr-empty{background:transparent;border:1px dashed rgba(128,128,128,.42);flex-direction:column;gap:10px;color:var(--dsw-alias-label-tertiary,#8a93a3)}
 .dru-qr-ghost{width:56px;height:56px;opacity:.3}
 .dru-qr-empty-text{font-size:11.5px;line-height:1.6;text-align:center;padding:0 6px}
+/* Sidebar More-menu row: the host menu row's own metrics, so 「远程」 sits beside the shipped rows. */
+.dru-more-row{display:flex;align-items:center;gap:6px;width:100%;min-height:34px;box-sizing:border-box;margin:0;padding:6px 8px;border:0;border-radius:var(--dsw-radius-md,8px);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;font-weight:400;line-height:20px;text-align:left;cursor:pointer}
+@media (hover:hover){.dru-more-row:hover{background:var(--dsw-alias-interactive-bg-hover)}}
+.dru-more-row:focus-visible{background:var(--dsw-alias-interactive-bg-hover);outline:none}
+.dru-more-row-icon{display:inline-flex;flex:0 0 auto;width:14px;height:14px;align-items:center;justify-content:center;color:var(--dsw-alias-menu-icon,var(--dsw-alias-label-secondary))}
+.dru-more-row-label{flex:1 1 0%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dru-more-row-check{margin-left:auto;flex:0 0 auto;display:inline-flex;width:14px;height:14px;align-items:center;justify-content:center;color:var(--dsw-alias-label-secondary)}
 html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
 @media (max-width:760px){.dru-page{padding:24px 18px 48px}.dru-body{flex-direction:column}.dru-left{width:100%}.dru-body{flex-direction:column;gap:14px}.dru-body>.dru-left{width:100%}.dru-qr{width:220px;height:220px;margin:0 auto}.dru-qr-hint{max-width:220px;margin:8px auto 0}.dru-field{flex-direction:column;gap:6px}.dru-field-label{width:auto;padding-top:0}.dru-hero{flex-direction:column;gap:12px}.dru-card{padding:14px 14px 16px}}
 `
@@ -2450,6 +2458,7 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
       )
     }
 
+    /** The 「远程」 glyph: the sidebar More-menu row's icon. */
     function PanelIcon({ size }) {
       return h(
         'svg',
@@ -2464,6 +2473,50 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
       inject: ['slots'],
       apply(ctx) {
         ensureStyles()
+        /**
+         * The sidebar's 「更多」 menu row for 「远程」.
+         *
+         * The host renders this slot inside its Menu popover and hands each entry the owner props
+         * (`onDismiss`) plus the standard slot props (`usePanelInfo`). Opening goes through
+         * `layout.selectPanel` because `onOpen` only addresses ids still registered in
+         * `sidebar.panellist` — this row is not one of them any more.
+         */
+        function MoreRow(props) {
+          const select = props?.usePanelInfo
+          const active = typeof select === 'function'
+            ? select((info) => info.activePanelId === PANEL_ID)
+            : false
+          const open = () => {
+            props?.onDismiss?.()
+            ctx.get('layout')?.selectPanel(PANEL_ID)
+          }
+          return h(
+            'button',
+            { type: 'button', role: 'menuitem', className: 'dru-more-row', onClick: open },
+            h('span', { className: 'dru-more-row-icon' }, h(PanelIcon, { size: 14 })),
+            h('span', { className: 'dru-more-row-label' }, '远程'),
+            active
+              ? h(
+                  'svg',
+                  {
+                    className: 'dru-more-row-check',
+                    width: 14,
+                    height: 14,
+                    viewBox: '0 0 24 24',
+                    fill: 'none',
+                    'aria-hidden': 'true'
+                  },
+                  h('path', {
+                    d: 'M20 6 9 17l-5-5',
+                    stroke: 'currentColor',
+                    strokeWidth: 2,
+                    strokeLinecap: 'round',
+                    strokeLinejoin: 'round'
+                  })
+                )
+              : null
+          )
+        }
         ctx.effect(() => {
           if (typeof require.async !== 'function') {
             console.warn('dsh-mobile-harness: async chunk loading unavailable')
@@ -2486,10 +2539,12 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
             dispose?.()
           }
         }, 'dsh-mobile-harness: mobile skin')
-        ctx.slots.inject('sidebar.panellist', () =>
+        // The sidebar's 「更多」 menu: while this list has registrations the sidebar renders its More
+        // button. order -10 keeps 「远程」 above the shipped "browse plugins / create plugin" rows.
+        ctx.slots.inject('sidebar.panellist.actions', () =>
           ctx.slots.register(
-            { name: 'sidebar.panellist', id: PANEL_ID, order: 20, label: () => '远程' },
-            PanelIcon
+            { name: 'sidebar.panellist.actions', id: PANEL_ID, order: -10, label: () => '远程' },
+            MoreRow
           )
         )
         ctx.slots.inject('main', () =>
