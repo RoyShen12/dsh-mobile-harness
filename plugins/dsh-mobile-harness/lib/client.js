@@ -382,7 +382,9 @@ globalThis.__ModuleLoader__.load({
 .dru-more-row-label{flex:1 1 0%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dru-more-row-check{margin-left:auto;flex:0 0 auto;display:inline-flex;width:14px;height:14px;align-items:center;justify-content:center;color:var(--dsw-alias-label-secondary)}
 html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
-@media (max-width:760px){.dru-page{padding:24px 18px 48px}.dru-body{flex-direction:column}.dru-left{width:100%}.dru-body{flex-direction:column;gap:14px}.dru-body>.dru-left{width:100%}.dru-qr{width:220px;height:220px;margin:0 auto}.dru-qr-hint{max-width:220px;margin:8px auto 0}.dru-field{flex-direction:column;gap:6px}.dru-field-label{width:auto;padding-top:0}.dru-hero{flex-direction:column;gap:12px}.dru-card{padding:14px 14px 16px}}
+@media (max-width:760px){.dru-page{padding:24px 18px 48px}.dru-body{flex-direction:column}.dru-left{width:100%}.dru-body{flex-direction:column;gap:14px}.dru-body>.dru-left{width:100%}.dru-qr{width:220px;height:220px;margin:0 auto}.dru-qr-hint{max-width:220px;margin:8px auto 0}.dru-field{flex-direction:column;gap:6px}.dru-field-label{width:auto;padding-top:0}.dru-hero{flex-direction:column;gap:12px}.dru-card{padding:14px 14px 16px}
+/* The macOS frame delegates top-strip clearance to the main panel content. */
+html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-clearance,0px))}}
 `
 
     function ensureStyles() {
