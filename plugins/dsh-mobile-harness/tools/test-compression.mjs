@@ -266,6 +266,49 @@ function decodeBody(response) {
   return response.body.toString('utf8')
 }
 
+test('settings describe reads the current upstream revision without caching or merging', async () => {
+  let revision = 'before'
+  let hits = 0
+  const server = http.createServer(async (req, res) => {
+    let raw = ''
+    for await (const chunk of req) raw += chunk
+    hits += 1
+    const { rpcId } = JSON.parse(raw)
+    const body = JSON.stringify({ type: 'client-response', rpcId, payload: { revision } })
+    setTimeout(() => {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(body)
+    }, 20)
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const proxy = new GatewayProxy({ upstreamHost: '127.0.0.1', upstreamPort: server.address().port })
+  const describe = async (rpcId) => {
+    const response = new FakeResponse()
+    proxy.proxyRequest(fakeRequest({
+      method: 'POST',
+      url: '/api/settings/describe',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId, method: 'settings/describe', payload: { args: {} } })
+    }), response, { id: 'device-a', isNew: false })
+    await response.done
+    assert.equal(response.statusCode, 200)
+    return JSON.parse(decodeBody(response))
+  }
+
+  try {
+    assert.equal((await describe('before')).payload.revision, 'before')
+    // Simulate a host-side write, invisible to the gateway.
+    revision = 'after'
+    const reads = await Promise.all([describe('left'), describe('right')])
+    assert.deepEqual(reads.map(({ rpcId, payload }) => [rpcId, payload.revision]), [
+      ['left', 'after'], ['right', 'after']
+    ])
+    assert.equal(hits, 3, 'each describe request must reach the upstream')
+  } finally {
+    server.close()
+  }
+})
+
 test('read POST cache ignores rpcId, shares one upstream call and replays each caller rpcId', async () => {
   let hits = 0
   const upstreamEncodings = []
@@ -303,14 +346,14 @@ test('read POST cache ignores rpcId, shares one upstream call and replays each c
   const message = (rpcId, args = {}) => JSON.stringify({
     type: 'client-request',
     rpcId,
-    method: 'settings/describe',
+    method: 'session/modelCatalog',
     payload: { args }
   })
   const call = async (rpcId, encoding, args) => {
     const response = new FakeResponse()
     const req = fakeRequest({
       method: 'POST',
-      url: '/api/settings/describe',
+      url: '/api/session/modelCatalog',
       headers: { 'content-type': 'application/json', 'accept-encoding': encoding, cookie: 'dsh-gw=session' },
       body: message(rpcId, args)
     })
@@ -351,7 +394,7 @@ test('read POST cache ignores rpcId, shares one upstream call and replays each c
     const response = new FakeResponse()
     const req = fakeRequest({
       method: 'POST',
-      url: '/api/settings/describe',
+      url: '/api/session/modelCatalog',
       headers: { 'content-type': 'application/json', 'content-length': '9' },
       body: 'not-json!'
     })

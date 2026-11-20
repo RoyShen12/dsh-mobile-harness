@@ -53,10 +53,10 @@ const MAX_UNKNOWN_BACKOFF_MS = 1000
 /**
  * Read-only API POSTs that the mobile shell repeats while a page opens. They are safe to
  * cache briefly and share between concurrent callers because they neither change state nor
- * depend on the body beyond the parameters it already carries.
+ * depend on the body beyond the parameters it already carries. Settings describe is excluded
+ * so a read started after a settings write cannot reuse an older response or in-flight read.
  */
 const READ_ONLY_POST_API = new Set([
-  '/api/settings/describe',
   '/api/session/modelCatalog',
   '/api/session/list',
   '/api/skills/list',

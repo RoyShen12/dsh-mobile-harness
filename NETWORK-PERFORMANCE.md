@@ -58,9 +58,10 @@ wss://<host>/api/remote.mux 101 permessage-deflate
 - 单条上限 2 MB、总缓存 32 MB、最多 64 条，按 LRU 淘汰；
 - 上游 401/403 刷新一次 DSH cookie 再重试；
 - 剥离缓存里的 `set-cookie`，设备 cookie 仍按调用方单独下发；
-- 覆盖 `/api/settings/describe`、`/api/session/modelCatalog`、`/api/session/list`、`/api/skills/list`、`/api/agentPresets/list` 等只读接口。
+- 覆盖 `/api/session/modelCatalog`、`/api/session/list`、`/api/skills/list`、`/api/agentPresets/list` 等允许短暂复用响应的只读接口。
+- `/api/settings/describe` 的每个请求都直接转发上游，跳过网关缓存和在途合并，避免设置保存后的读取拿到旧版本。响应仍可压缩。
 
-这消除了打开页面时 `settings/describe`、`modelCatalog` 的重复上游调用，并让 5 秒内的连续刷新复用 `/api/session/list`。
+这消除了打开页面时 `modelCatalog` 的重复上游调用，并让 5 秒内的连续刷新复用 `/api/session/list`。
 
 ### 5. 缓存与 SSE 头修正
 
@@ -86,7 +87,7 @@ wss://<host>/api/remote.mux 101 permessage-deflate
 | 首个插件组合 chunk | 7,365,048 B | 1,583,512 B | -78.5% |
 | 第二个插件组合 chunk | 5,887,910 B | 1,198,465 B | -79.6% |
 | `/api/session/list` | 955,472 B | 98,877 B | -89.7% |
-| `/api/settings/describe` 两次合计 | 165,554 B | 19,650 B（上游只打一次） | -88.1% |
+| `/api/settings/describe` 两次合计（历史数据，网关仍缓存时） | 165,554 B | 19,650 B（上游只打一次） | -88.1% |
 | 空闲 40 s 的审批轮询 | 约 12 MB/h 全量状态 | 3 次 304，0 字节正文 | 几乎为 0 |
 | `/plugins/events` 初始 graph | 105,780 B（4 次连接） | 165 B（3 次连接） | 每次连接约省 26–35 KB |
 
