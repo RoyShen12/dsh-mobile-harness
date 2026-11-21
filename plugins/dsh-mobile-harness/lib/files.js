@@ -8,9 +8,9 @@
  * This module is self-contained on purpose: the transfer feature no longer depends on
  * the life-helper plugin.
  */
-import { createReadStream } from 'node:fs'
-import { mkdir, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
-import { basename, extname, join, resolve, sep } from 'node:path'
+import { constants } from 'node:fs'
+import { lstat, mkdir, open, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { basename, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 /** Folder name under the plugin state directory. */
@@ -72,14 +72,11 @@ export function contentDisposition(name) {
   return 'attachment; filename="' + ascii + '"; filename*=UTF-8\'\'' + encoded
 }
 
-/** Resolve a pool-relative path; null when it would escape the root. */
-export function resolveInPool(dir, rel) {
-  if (typeof rel !== 'string' || rel.length === 0) return null
-  const base = resolve(dir)
-  const target = resolve(base, rel)
-  const lower = (value) => value.toLowerCase()
-  if (lower(target) !== lower(base) && !lower(target).startsWith(lower(base) + sep)) return null
-  return target
+/** IDs name direct children only; never interpret an ID as a path. */
+export function resolveInPool(dir, name) {
+  if (!name || typeof name !== 'string' || name === '.' || name === '..' || /[\/\\\x00]/.test(name) || name.endsWith('.part')) return null
+  if (process.platform === 'win32' && (/:|[. ]$/.test(name) || /^(con|prn|aux|nul|conin\$|conout\$|(?:com|lpt)[1-9¹²³])(?:\.|$)/i.test(name))) return null
+  return join(dir, name)
 }
 
 export async function ensurePool(dir) {
@@ -93,7 +90,9 @@ export async function listPool(dir) {
   for (const item of await readdir(dir, { withFileTypes: true })) {
     if (!item.isFile() || item.name.endsWith('.part')) continue
     try {
-      const info = await stat(join(dir, item.name))
+      if (!resolveInPool(dir, item.name)) continue
+      const info = await lstat(join(dir, item.name))
+      if (!info.isFile()) continue
       entries.push({ id: encodeId(item.name), name: item.name, size: info.size, mtime: info.mtimeMs })
     } catch {
       /* the file vanished between readdir and stat */
@@ -137,9 +136,19 @@ export async function openFile(dir, id) {
   const rel = decodeId(id)
   const path = rel ? resolveInPool(dir, rel) : null
   if (!path) return null
-  const info = await stat(path).catch(() => null)
-  if (!info || !info.isFile()) return null
-  return { path, name: basename(path), size: info.size, mime: mimeOf(basename(path)), stream: () => createReadStream(path) }
+  const entry = await lstat(path, { bigint: true }).catch(() => null)
+  if (!entry?.isFile()) return null
+  const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)
+  const handle = await open(path, flags).catch(() => null)
+  if (!handle) return null
+  try {
+    const info = await handle.stat({ bigint: true })
+    if (info.isFile() && info.dev === entry.dev && info.ino === entry.ino) {
+      return { name: rel, size: Number(info.size), mime: mimeOf(rel), stream: () => handle.createReadStream() }
+    }
+  } catch { /* file disappeared or became inaccessible */ }
+  await handle.close()
+  return null
 }
 
 export async function removeFile(dir, id) {
@@ -147,6 +156,7 @@ export async function removeFile(dir, id) {
   const path = rel ? resolveInPool(dir, rel) : null
   if (!path) return false
   try {
+    if (!(await lstat(path)).isFile()) return false
     await unlink(path)
     return true
   } catch {
