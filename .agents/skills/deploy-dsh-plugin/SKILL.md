@@ -11,7 +11,7 @@ description: "部署 dsh-mobile-harness 到本机 DSH profile 时使用，优先
 
 - 当前 DSH 的 Plugin Manager 与 HMR 支持在 profile 重组时检测并替换已安装插件的变化模块；`dsh-mobile-harness` 没有必须重启整个 DSH 的特殊要求。
 - 优先通过 Plugin Manager 的更新 / 重装完成部署，以操作结果的 `application`、`nextStep`、`restartReason` 及实际页面验证判断是否生效。重装现有包若返回 `already-installed`，按管理器支持的先移除再安装流程处理。
-- 插件重载会关闭并重新打开远程网关，远程连接短暂中断；执行前取得用户对这次部署 / 重载的许可。
+- 插件热重载（HRT）会关闭并重新打开远程网关，远程连接短暂中断。用户已授权后续直接执行这类插件级热重载，无需逐次确认；重启整个 DSH 仍需另行取得明确确认。
 - 下方是外部脚本同步后显式重启的旧流程，仅在用户明确选择这种方式、宿主未启用 HMR 或管理器返回 `restart-required` 时使用。
 
 ## 外部脚本同步与重启流程
