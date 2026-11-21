@@ -49,11 +49,11 @@ dsh plugin --profile desktop add dsh-mobile-harness
 node scripts/install-plugin.mjs --profile desktop   # 写依赖 + bundle 条目，幂等
 ```
 
-通过当前 DSH 的 Plugin Manager 安装时，启用 HMR 的 profile 可立即加载，按安装结果的 `application` / `nextStep` 操作；会话侧栏的「更多」菜单出现「远程」。使用旧版宿主或仅在外部脚本中同步文件时，需触发插件重载或按提示重启。
+通过当前 DSH 的 Plugin Manager 安装时，启用 HMR 的 profile 可立即加载，按安装结果的 `application` / `nextStep` 操作；「远程」默认显示在会话侧栏。支持侧栏固定的 DSH 版本中，取消固定后可在「更多」打开或重新固定。使用旧版宿主或仅在外部脚本中同步文件时，需触发插件重载或按提示重启。
 
 ## 使用
 
-1. 侧栏「更多」→「远程」→ 右上角开关打开。
+1. 打开侧栏「远程」（取消固定后在「更多」里），再打开右上角开关。
 2. 选网络入口（推荐**外部隧道**或 **Cloudflare**，见下）。
 3. 手机扫码：等待页显示 6 位配对码 → 电脑面板「设备准入」核对同一串 → 点「允许」→「数字一致，允许」。
 
