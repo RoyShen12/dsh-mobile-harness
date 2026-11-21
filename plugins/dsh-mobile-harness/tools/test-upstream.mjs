@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { GatewayProxy } from '../lib/proxy.js'
+import { GatewayProxy, SESSION_MAX_AGE_SECONDS } from '../lib/proxy.js'
 import { RemoteService } from '../lib/service.js'
 import { connectUpstream, parseUpstreamOrigin, requestUpstream, resolveUpstreamOrigin } from '../lib/upstream.js'
 
@@ -73,8 +73,11 @@ async function relayCase(protocol, host, credentials) {
     gatewaySockets.add(socket)
     socket.on('close', () => gatewaySockets.delete(socket))
   })
-  gateway.on('upgrade', (req, socket) => proxy.connectUpgrade(req, socket, () => {}, 1))
+  // Isolate the relay lifecycle with an already authenticated, nearly expired session.
+  proxy.authorizedSession = () => ({ id: 'test-session', deviceId: 'test-device', issuedAt: Date.now() - SESSION_MAX_AGE_SECONDS * 1000 + 350 })
+  gateway.on('upgrade', (req, socket) => proxy.handleUpgrade(req, socket))
   const gatewayPort = await listen(gateway, '127.0.0.1')
+  proxy.port = gatewayPort
   try {
     const fakeService = { webOrigin: () => origin, ctx: { connection: { authenticatedUrl: base => base + '?token=launch' } } }
     assert.equal(await RemoteService.prototype.resolveDshCookie.call(fakeService), 'dsh-owner=test')
@@ -91,13 +94,16 @@ async function relayCase(protocol, host, credentials) {
     client.setTimeout(3000, () => client.destroy(new Error('upgrade timeout')))
     try {
       await once(client, 'connect')
-      client.write('GET /api/remote.mux HTTP/1.1\r\nHost: phone\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n')
+      client.write(`GET /api/remote.mux HTTP/1.1\r\nHost: phone\r\nOrigin: http://127.0.0.1:${gatewayPort}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`)
       const [handshake] = await once(client, 'data')
       assert.match(handshake.toString(), /^HTTP\/1\.1 101/)
       client.write('echo')
       const [echo] = await once(client, 'data')
       assert.equal(echo.toString(), 'echo')
       assert.equal(received.host, new URL(origin).host)
+      const [relay] = proxy.sessionSockets.get('test-session')
+      await Promise.all([once(client, 'close'), once(relay, 'close')]) // Either endpoint may observe close first.
+      assert.equal(proxy.sessionSockets.has('test-session'), false)
     } finally { client.destroy() }
     console.log(`PASS cookie, HTTP, origin headers, selfcheck, WebSocket: ${protocol} ${host}`)
   } finally {

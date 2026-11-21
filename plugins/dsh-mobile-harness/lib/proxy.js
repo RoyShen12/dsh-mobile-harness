@@ -2550,7 +2550,12 @@ export class GatewayProxy {
       const sockets = this.sessionSockets.get(session.id) ?? new Set()
       sockets.add(socket)
       this.sessionSockets.set(session.id, sockets)
+      // The cookie is only checked at upgrade; traffic must not extend its absolute lifetime.
+      const remaining = Number(session.issuedAt) + SESSION_MAX_AGE_SECONDS * 1000 - Date.now()
+      const expiry = setTimeout(() => socket.destroy(), Math.max(0, remaining))
+      expiry.unref()
       socket.once('close', () => {
+        clearTimeout(expiry)
         const current = this.sessionSockets.get(session.id)
         if (!current) return
         current.delete(socket)
@@ -2566,6 +2571,7 @@ export class GatewayProxy {
 
   /** Relays a WebSocket handshake, refreshing the DSH cookie once if upstream answers 401/403. */
   connectUpgrade(req, socket, release, attempt) {
+    if (socket.destroyed) return // May expire while refreshing the upstream cookie.
     const upstreamSocket = connectUpstream(this.upstreamOrigin(), () => {
       const headers = this.upstreamHeaders(req)
       const lines = [`${req.method} ${req.url} HTTP/1.1`]
@@ -2625,6 +2631,7 @@ export class GatewayProxy {
     })
     socket.on('error', () => upstreamSocket.destroy())
     socket.once('end', () => upstreamSocket.destroy())
+    socket.once('close', () => upstreamSocket.destroy())
   }
 
   async start(preferredPort, host = '127.0.0.1') {
