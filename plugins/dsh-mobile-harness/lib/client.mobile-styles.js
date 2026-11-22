@@ -1226,15 +1226,19 @@ html[data-dru-mobile][data-dru-skin-state="ready"].dru-overlay-open body {
   }
 }
 `;
-    // Keep the host's responsive shell; only adapt the native composer on narrow screens.
+    // Use the allocated chat width: safe areas, fold transitions, and side panes can all change it.
     const NATIVE_COMPOSER_CSS = String.raw`
-@media (max-width: 640px) {
+html:not([data-dru-ui="compat"]) [data-composer-seat] {
+  container-name: dsh-mobile-composer;
+  container-type: inline-size;
+}
+@container dsh-mobile-composer (310px <= width <= 640px) {
   [data-slot="conversation.input.model"] {
     --dsh-composer-model-text-display: block;
     --dsh-composer-model-icon-display: none;
   }
   [data-slot="conversation.input.model"] button {
-    max-inline-size: clamp(64px, calc(100vw - 228px), 220px);
+    max-inline-size: clamp(64px, calc(100cqi - 190px), 220px);
     padding-inline: 5px;
     gap: 4px;
   }
@@ -1250,13 +1254,6 @@ html[data-dru-mobile][data-dru-skin-state="ready"].dru-overlay-open body {
   [data-slot="conversation.input.model"] :is(.lgmp-effort, .qol-effort-name) {
     display: none;
   }
-  [data-composer-placeholder] {
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-  :is([data-composer-input], textarea):has(+ [data-composer-placeholder]) {
-    min-block-size: calc(2lh + 11px);
-  }
   [data-composer-dock] {
     flex-wrap: nowrap;
     column-gap: 4px;
@@ -1266,6 +1263,15 @@ html[data-dru-mobile][data-dru-skin-state="ready"].dru-overlay-open body {
   }
   [data-composer-stat="activity"] button > span {
     display: none;
+  }
+}
+@container dsh-mobile-composer (width <= 400px) {
+  [data-composer-placeholder] {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  :is([data-composer-input], textarea):has(+ [data-composer-placeholder]) {
+    min-block-size: calc(2lh + 11px);
   }
 }
 `;

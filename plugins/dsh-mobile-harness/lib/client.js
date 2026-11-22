@@ -2476,7 +2476,7 @@ html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-
           }
           let disposed = false
           let dispose
-          // Skin 2.2.5: keep the native mobile composer controls and usage on compact rows.
+          // Skin 2.2.6: reflow the composer by its available width on folding displays.
           Promise.all([
             require.async('./client.mobile-skin.js'),
             require.async('./client.mobile-styles.js')
