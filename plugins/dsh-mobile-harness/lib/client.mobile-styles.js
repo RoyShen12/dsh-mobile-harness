@@ -1234,7 +1234,18 @@ html[data-dru-mobile][data-dru-skin-state="ready"].dru-overlay-open body {
     --dsh-composer-model-icon-display: none;
   }
   [data-slot="conversation.input.model"] button {
-    max-inline-size: min(42vw, 220px);
+    max-inline-size: clamp(64px, calc(100vw - 228px), 220px);
+    padding-inline: 5px;
+    gap: 4px;
+  }
+  [class*="_row"]:has(> [class*="_trailing"] [data-slot="conversation.input.model"]) {
+    flex-wrap: nowrap;
+  }
+  [class*="_trailing"]:has([data-slot="conversation.input.model"]) {
+    flex-shrink: 1;
+  }
+  [data-slot="conversation.input.model"] > * {
+    min-inline-size: 0;
   }
   [data-slot="conversation.input.model"] :is(.lgmp-effort, .qol-effort-name) {
     display: none;
@@ -1247,12 +1258,14 @@ html[data-dru-mobile][data-dru-skin-state="ready"].dru-overlay-open body {
     min-block-size: calc(2lh + 11px);
   }
   [data-composer-dock] {
-    flex-wrap: wrap;
-    row-gap: 2px;
+    flex-wrap: nowrap;
+    column-gap: 4px;
   }
-  [data-composer-dock] :is([data-composer-stat], .dshbill-anchor, [data-slot="conversation.composer.dock"] > span) {
+  [data-composer-dock] :is([data-composer-stat="activity"], .dshbill-anchor) {
     flex: 0 0 auto;
-    max-inline-size: 100%;
+  }
+  [data-composer-stat="activity"] button > span {
+    display: none;
   }
 }
 `;
