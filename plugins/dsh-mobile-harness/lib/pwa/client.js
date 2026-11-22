@@ -10,7 +10,16 @@
   const modes = ['fullscreen', 'standalone', 'minimal-ui'].map((name) => ({
     name, query: typeof window.matchMedia === 'function' ? window.matchMedia(`(display-mode: ${name})`) : null
   }))
-  const launchedAsApp = Boolean(navigator.standalone) || modes.some((mode) => mode.query?.matches && !fullscreenElement())
+  const isAppMode = ({ name, query }) => query?.matches
+    && (name === 'standalone' || (name === 'fullscreen' && !fullscreenElement()))
+  const launchedAsApp = Boolean(navigator.standalone) || modes.some(isAppMode)
+  const launchedAsInstalled = launchedAsApp || modes.some(({ name, query }) => name === 'minimal-ui' && query?.matches)
+  function iosHomeScreen() {
+    // Safari historically exposes navigator.standalone; newer WebKit can report
+    // the launch through display-mode (separate from a temporary API fullscreen).
+    return ios && (Boolean(navigator.standalone) || launchedAsApp || modes.some(isAppMode))
+  }
+
   let deferredPrompt = null
   let installedByEvent = false
   let error = null
@@ -26,7 +35,7 @@
   }
 
   function installed() {
-    return installedByEvent || launchedAsApp || Boolean(navigator.standalone)
+    return installedByEvent || launchedAsInstalled || Boolean(navigator.standalone)
       || modes.some((mode) => mode.query?.matches && (mode.name !== 'fullscreen' || !fullscreenElement()))
   }
 
@@ -40,14 +49,14 @@
     const isInstalled = installed()
     return {
       supported, installed: isInstalled, canPrompt: Boolean(deferredPrompt && !isInstalled), ios, secure, error,
-      displayMode: displayMode(), fullscreen: Boolean(fullscreenElement()),
+      displayMode: displayMode(), iosHomeScreen: iosHomeScreen(), fullscreen: Boolean(fullscreenElement()),
       fullscreenSupported: fullscreenSupported(), fullscreenError
     }
   }
 
   function changed() {
     // black-translucent leaves system glyphs over the page: give them a stable dark backdrop.
-    document.documentElement.toggleAttribute('data-dsh-pwa-ios', Boolean(ios && navigator.standalone))
+    document.documentElement.toggleAttribute('data-dsh-pwa-ios', iosHomeScreen())
     document.documentElement.toggleAttribute('data-dsh-pwa-android', /Android/i.test(ua))
     window.dispatchEvent(new Event('dsh-pwa-change'))
   }

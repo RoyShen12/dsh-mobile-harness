@@ -269,7 +269,7 @@ globalThis.__ModuleLoader__.load({
 .dru-error{margin:0 18px 18px;padding:10px 12px;border-radius:8px;border:1px solid rgba(255,122,89,.4);background:rgba(255,122,89,.08);color:#ffb3a0;font-size:12px;line-height:1.7}
 .dru-note{max-width:820px;margin-top:16px;font-size:12px;line-height:1.8;color:var(--dsw-alias-label-tertiary,#8a93a3)}
 .dru-footer{max-width:820px;margin-top:22px;padding-top:14px;border-top:1px solid var(--dsw-alias-line-1,rgba(128,128,128,.2));font-size:12px;line-height:1.8;color:var(--dsw-alias-label-tertiary,#8a93a3)}
-.dru-mask{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(8,10,14,.55);pointer-events:auto;animation:dru-fade .16s ease}
+.dru-mask{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:max(24px,env(safe-area-inset-top,0px)) max(24px,env(safe-area-inset-right,0px)) max(24px,env(safe-area-inset-bottom,0px)) max(24px,env(safe-area-inset-left,0px));background:rgba(8,10,14,.55);pointer-events:auto;animation:dru-fade .16s ease}
 .dru-dialog{box-sizing:border-box;width:min(430px,100%);padding:22px 22px 16px;border:1px solid var(--dsw-alias-line-1,rgba(128,128,128,.3));border-radius:16px;background:var(--dsw-alias-bg-layer-2,#1b1e24);color:var(--dsw-alias-label-primary);box-shadow:0 24px 64px rgba(0,0,0,.55);animation:dru-pop .18s cubic-bezier(.2,.9,.3,1.1)}
 .dru-dialog-head{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:600}
 .dru-dialog-device{margin-top:7px;font-size:12.5px;line-height:1.6;color:var(--dsw-alias-label-secondary)}
@@ -800,7 +800,7 @@ html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-
         : !window.isSecureContext
           ? '请通过 HTTPS 地址访问，并使用受信任的证书，再添加到主屏幕。'
           : state?.ios
-            ? '在 Safari 中点「分享」→「添加到主屏幕」→「添加」。其他 iPhone 浏览器可先选择「在 Safari 中打开」。'
+            ? '在 Safari 中点「分享」→「添加到主屏幕」，如有「作为网页 App 打开」请保持开启，再点「添加」。随后从主屏幕图标打开。'
             : state?.canPrompt
               ? '点「安装到主屏幕」，在浏览器提示中确认安装。'
               : '打开浏览器菜单，选择「安装应用」或「添加到主屏幕」。若菜单未出现该项，请使用最新版 Chrome、Edge 或 Safari。'
@@ -838,7 +838,9 @@ html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-
       const hint = state?.fullscreen
         ? '当前为页面全屏。点击「退出全屏」，或使用系统返回 / Esc / 浏览器退出手势。'
         : state?.ios
-          ? 'iPhone / iPad 从主屏幕打开后使用边到边布局和半透明状态栏，时间、电量等由系统保留。支持页面全屏的 iPad 浏览器可点击下方按钮。'
+          ? state.iosHomeScreen
+            ? '当前从主屏幕启动，浏览器工具栏已隐藏。页面背景延伸到屏幕边缘，控件避开灵动岛、刘海和底部手势区；时间和电量由 iOS 显示。'
+            : '在 Safari 中将此页面添加为主屏幕网页 App，再从图标启动，即可隐藏浏览器工具栏并使用边到边布局。'
           : state?.displayMode === 'fullscreen'
             ? '当前 PWA 以 fullscreen 启动。系统手势可能临时显示状态栏；要结束应用，请使用系统返回或主页。'
             : state?.installed

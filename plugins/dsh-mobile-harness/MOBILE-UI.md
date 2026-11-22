@@ -20,7 +20,9 @@ DSH 0.2.2-rc.5 的 Android 外屏实测视口为 350×805。内屏竖向 691×76
 
 PWA manifest 优先 `fullscreen` 并显式回退 `standalone`；远程「界面 → 沉浸式显示」使用 `window.__dshPwa` 的本地视图 API。页面全屏只由点击触发，保留进入 / 退出、浏览器错误和 `fullscreenchange` / display-mode 订阅；退出或焦点恢复时不自动请求全屏，无新增 observer、rAF 循环或轮询。
 
-网关 PWA head 保留已选 viewport 的 width / zoom / interactive-widget，仅统一追加 `viewport-fit=cover`。原生宿主根内容盒 `#root` 在旧 skin 未启用时使用 safe-area；Android 全屏时根顶部 padding 为 0。窄竖屏会话顶栏只在中央留出挖孔空间，标题和操作使用同一行的两侧；展开或横屏保留右上角按钮的局部避让。展开的全屏右栏仍局部避让，左右及底部安全区保留。旧 skin 启用后复用其 header / rail / composer insets。iOS 主屏幕以 `black-translucent` 延伸背景到顶部，顶部 inset 绘制固定深色背景提升系统字形可读性；这属于系统状态栏保留时的边到边视觉退路，未承诺 iPhone 状态栏字形消失。
+网关保留宿主的 viewport 设置并追加 `viewport-fit=cover`。默认按浏览器报告的四边安全区摆放内容；背景延伸到可绘制边缘，旧 skin 仅在布局就绪后接管避让。Android 全屏只对已测量的折叠机内外屏竖向尺寸与像素密度启用局部挖孔布局，其他尺寸和横屏继续使用系统安全区。
+
+面向 iPhone 15、16、17、18 Pro / Pro Max 的主屏幕网页 App 共用 WebKit 的 `safe-area-inset-*`，覆盖竖屏顶部、横屏两侧和底部手势区，无需识别具体机型。主屏幕模式兼容 `navigator.standalone` 与 `display-mode`；Safari 中的临时页面全屏单独处理。iOS 保留时间、电量等系统字形，`black-translucent` 在支持的系统上让页面延伸到状态栏下方。
 
 更新需 Host 插件级重载（PWA assets 模块内存驻留）与页面刷新；安装显示模式还需浏览器刷新安装元数据并从主屏幕重开，必要时重新添加图标。官方出处、平台限制与安装更新条件见 [PWA 说明](README.md#沉浸式显示与状态栏)。
 
@@ -28,7 +30,7 @@ PWA manifest 优先 `fullscreen` 并显式回退 `standalone`；远程「界面 
 
 - [x] Android 重装后通过已安装PWA launcher入口启动：`display-mode: fullscreen`、API fullscreenElement为空，系统状态栏收起；内外屏root/header顶部0，原33px全页安全区空行消除。直接手点桌面图标及折叠切换连续显示尚未单独测试；右栏关闭控件局部摄像头避让/层叠已通过内外屏可信触摸，按钮中心命中并可关闭。
 - [x] Android 旧 standalone 安装的页面全屏：内外屏触控进入/退出、系统状态栏隐藏、退出保持退出和overlay操作通过；切屏退出API全屏。直接从旧图标启动仍为standalone，安装态更新与自动全屏另列待验收。拒绝请求提示已由定向测试覆盖。
-- [ ] iPhone Safari 主屏幕：竖 / 横屏 black-translucent、安全区、刘海和 Home indicator；记录实际系统字形是否保留。桌面 CDP meta 检查仅证明标记存在。
+- [ ] iPhone Safari 主屏幕：竖 / 横屏 black-translucent、安全区、刘海和 Home indicator；记录实际系统字形是否保留。Chromium 模拟已验证 393×852、440×956 与 956×440 的四边安全距离；iPhone 18 Pro 模拟器打开了 Safari 网关登录页，未完成主屏幕安装后的实页验收；各 iPhone 真机未测试。
 - [ ] iPad 支持 Fullscreen API 的浏览器：手势进入 / 退出与旋转，确保顶部 / 底部安全区不重复。
 
 ## 旧宿主布局模式

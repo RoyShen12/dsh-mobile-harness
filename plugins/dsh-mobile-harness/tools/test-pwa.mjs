@@ -8,7 +8,7 @@ import { injectPwa } from '../lib/pwa.js'
 const source = readFileSync(new URL('../lib/pwa/client.js', import.meta.url), 'utf8')
 const manifest = JSON.parse(readFileSync(new URL('../lib/pwa/manifest.webmanifest', import.meta.url), 'utf8'))
 
-function fixture({ mode = 'browser', ios = false, supported = true, activation = true } = {}) {
+function fixture({ mode = 'browser', ios = false, standalone = ios && mode === 'standalone', supported = true, activation = true } = {}) {
   const queries = new Map()
   const winListeners = new Map()
   const docListeners = new Map()
@@ -27,7 +27,7 @@ function fixture({ mode = 'browser', ios = false, supported = true, activation =
     addEventListener(name, fn) { docListeners.set(name, fn) },
     async exitFullscreen() { document.fullscreenElement = null; emitDoc('fullscreenchange') }
   }
-  const navigator = { userAgent: ios ? 'iPhone' : 'Android', platform: ios ? 'iPhone' : 'Linux', maxTouchPoints: 1, standalone: ios && mode === 'standalone', userActivation: { isActive: activation } }
+  const navigator = { userAgent: ios ? 'iPhone' : 'Android', platform: ios ? 'iPhone' : 'Linux', maxTouchPoints: 1, standalone, userActivation: { isActive: activation } }
   const window = {
     isSecureContext: true,
     matchMedia(name) {
@@ -61,9 +61,10 @@ test('PWA head adds cover once, preserving host zoom and keyboard directives and
   assert.match(result, /gwrev=/)
   assert.match(result, /__dshGwBridge/)
   assert.equal((result.match(/__dshGwBridge/g) || []).length, 2)
-  assert.match(result, /html:not\(\[data-dru-mobile\]\) #root/)
+  assert.match(result, /html:not\(\[data-dru-skin-state="ready"\]\) #root/)
   assert.match(result, /env\(safe-area-inset-bottom,0px\)/)
   assert.match(result, /@media\(display-mode:fullscreen\)[\s\S]*data-dsh-pwa-android.*padding-top:0/)
+  for (const edge of ['top', 'right', 'bottom', 'left']) assert.ok(result.includes(`env(safe-area-inset-${edge},0px)`))
   assert.equal(fixture({ mode: 'fullscreen' }).attributes.has('data-dsh-pwa-android'), true)
   assert.match(injectPwa('<html><body></body></html>'), /viewport-fit=cover/)
 })
@@ -75,6 +76,20 @@ test('fullscreen PWA launch is installed even without an API fullscreen element'
   assert.equal(f.api.getState().displayMode, 'fullscreen')
   f.emitWin('beforeinstallprompt', { preventDefault() {} })
   assert.equal(f.api.getState().canPrompt, false)
+})
+
+test('iOS home-screen appearance accepts display-mode but not browser fullscreen', async () => {
+  for (const mode of ['standalone', 'fullscreen']) {
+    const f = fixture({ ios: true, mode, standalone: false })
+    assert.equal(f.api.getState().iosHomeScreen, true)
+    assert.equal(f.attributes.has('data-dsh-pwa-ios'), true)
+  }
+  const tab = fixture({ ios: true })
+  await tab.api.enterFullscreen()
+  tab.queries.get('(display-mode: fullscreen)').matches = true
+  tab.emitDoc('fullscreenchange')
+  assert.equal(tab.api.getState().iosHomeScreen, false)
+  assert.equal(tab.attributes.has('data-dsh-pwa-ios'), false)
 })
 
 test('API fullscreen retains user gesture, exit and external exit do not re-enter', async () => {

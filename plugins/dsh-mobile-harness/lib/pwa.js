@@ -2,16 +2,19 @@
 import { readFileSync } from 'node:fs'
 import { compressBuffer, compressionHeaders, isCompressibleType, MIN_COMPRESS_BYTES, negotiateEncoding } from './compress.js'
 
-// Native hosts own their keyboard/navigation layout; inset only their root content box.
-// Legacy skin already applies env(safe-area-inset-*) to its header, rail and composer.
+// Let backgrounds reach the screen edges; keep interactive content inside the safe rectangle.
+// A legacy skin takes over the insets only after its layout is ready.
 const SAFE_AREA_STYLE = `<style id="dsh-pwa-safe-area">
+html[data-dsh-pwa-ios],html[data-dsh-pwa-ios] body{overscroll-behavior:none}
 html[data-dsh-pwa-ios] body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:#0e1014;pointer-events:none;z-index:2147483647}
-html:not([data-dru-mobile]) #root{box-sizing:border-box;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
-@media(display-mode:fullscreen){
+html:not([data-dru-skin-state="ready"]) #root{box-sizing:border-box;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
+/* Fullscreen on Android keeps platform-reported insets by default. The two
+   measured foldable viewports below may use their compact local avoidance. */
+@media(display-mode:fullscreen) and (resolution:3.25dppx) and (349px <= width <= 352px) and (orientation:portrait), (display-mode:fullscreen) and (resolution:3.25dppx) and (690px <= width <= 693px) and (orientation:portrait){
 html[data-dsh-pwa-android]:not([data-dru-mobile]) #root{padding-top:0}
 html[data-dsh-pwa-android]:not([data-dru-mobile]) [data-sidebar-right-panel="fullscreen"][data-sidebar-right-open="true"] [class*="_stripChrome_"]:has([data-sidebar-right-toggle]){translate:0 max(0px,calc(env(safe-area-inset-top,0px) - 8px));position:relative;z-index:2}
 }
-@media(display-mode:fullscreen) and (width <= 640px) and (orientation:portrait){
+@media(display-mode:fullscreen) and (resolution:3.25dppx) and (349px <= width <= 352px) and (orientation:portrait){
 /* The web exposes the top inset, not the cutout's horizontal bounds. Leave a
    small center corridor on narrow portrait displays, with controls on both sides. */
 html[data-dsh-pwa-android]:not([data-dru-mobile]) header[data-window-drag] [class$="_titleRow"]:has(> [class$="_titleCluster"] [class$="_crumbs"]){
@@ -26,8 +29,8 @@ html[data-dsh-pwa-android]:not([data-dru-mobile]) header[data-window-drag] [clas
 html[data-dsh-pwa-android]:not([data-dru-mobile]) header[data-window-drag] [class$="_titleRow"]:has(> [class$="_titleCluster"] [class$="_crumbs"]) > [class$="_headerUtilities"]{grid-column:4;gap:2px;margin:0}
 html[data-dsh-pwa-android]:not([data-dru-mobile]) header[data-window-drag] [class$="_titleRow"]:has(> [class$="_titleCluster"] [class$="_crumbs"]) > [class$="_headerCorner"]{grid-column:5;margin:0}
 }
-@media(display-mode:fullscreen) and (width > 640px), (display-mode:fullscreen) and (orientation:landscape){
-/* Wide and landscape layouts retain the existing corner-only adjustment. */
+@media(display-mode:fullscreen) and (resolution:3.25dppx) and (690px <= width <= 693px) and (orientation:portrait){
+/* The measured inner portrait screen has a corner cutout. */
 html[data-dsh-pwa-android]:not([data-dru-mobile]) header[data-window-drag] [class$="_headerCorner"]{translate:0 max(0px,calc(env(safe-area-inset-top,0px) - 8px));position:relative;z-index:2}
 }
 </style>`
