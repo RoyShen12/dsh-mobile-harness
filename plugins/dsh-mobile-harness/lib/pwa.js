@@ -7,7 +7,9 @@ import { compressBuffer, compressionHeaders, isCompressibleType, MIN_COMPRESS_BY
 const SAFE_AREA_STYLE = `<style id="dsh-pwa-safe-area">
 html[data-dsh-pwa-ios] body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:#0e1014;pointer-events:none;z-index:2147483647}
 html:not([data-dru-mobile]) #root{box-sizing:border-box;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
-@media(display-mode:fullscreen){
+/* Narrow portrait displays can have a centered cutout: keep the full top inset
+   so titles and session actions stay clear, rather than shifting only corner chrome. */
+@media(display-mode:fullscreen) and (width > 640px), (display-mode:fullscreen) and (orientation:landscape){
 html[data-dsh-pwa-android]:not([data-dru-mobile]) #root{padding-top:0}
 /* Keep frame/glass at y=0. Corner chrome moves below the cutout and stays
    above later-painted body content, so its translated controls remain hit-testable. */
