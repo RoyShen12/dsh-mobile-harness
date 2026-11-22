@@ -20,7 +20,7 @@ DSH 0.2.2-rc.5 的 Android 外屏实测视口为 350×805。内屏竖向 691×76
 
 PWA manifest 优先 `fullscreen` 并显式回退 `standalone`；远程「界面 → 沉浸式显示」使用 `window.__dshPwa` 的本地视图 API。页面全屏只由点击触发，保留进入 / 退出、浏览器错误和 `fullscreenchange` / display-mode 订阅；退出或焦点恢复时不自动请求全屏，无新增 observer、rAF 循环或轮询。
 
-网关 PWA head 保留已选 viewport 的 width / zoom / interactive-widget，仅统一追加 `viewport-fit=cover`。原生宿主根内容盒 `#root` 在旧 skin 未启用时使用 safe-area；Android 实际 fullscreen 时根顶部 padding 为0，避免把整个页面/玻璃背景下移成空行，仅右侧 header corner action 与展开全屏右栏的 mode/close chrome 按顶部 cutout 做局部位移，并用局部定位/z-index保证移动后不被正文截获；左右/底部避让保留。旧 skin 启用后复用其 header / rail / composer insets。iOS 主屏幕以 `black-translucent` 延伸背景到顶部，顶部 inset 绘制固定深色背景提升系统字形可读性；这属于系统状态栏保留时的边到边视觉退路，未承诺 iPhone 状态栏字形消失。
+网关 PWA head 保留已选 viewport 的 width / zoom / interactive-widget，仅统一追加 `viewport-fit=cover`。原生宿主根内容盒 `#root` 在旧 skin 未启用时使用 safe-area；Android 全屏时根顶部 padding 为 0。窄竖屏会话顶栏只在中央留出挖孔空间，标题和操作使用同一行的两侧；展开或横屏保留右上角按钮的局部避让。展开的全屏右栏仍局部避让，左右及底部安全区保留。旧 skin 启用后复用其 header / rail / composer insets。iOS 主屏幕以 `black-translucent` 延伸背景到顶部，顶部 inset 绘制固定深色背景提升系统字形可读性；这属于系统状态栏保留时的边到边视觉退路，未承诺 iPhone 状态栏字形消失。
 
 更新需 Host 插件级重载（PWA assets 模块内存驻留）与页面刷新；安装显示模式还需浏览器刷新安装元数据并从主屏幕重开，必要时重新添加图标。官方出处、平台限制与安装更新条件见 [PWA 说明](README.md#沉浸式显示与状态栏)。
 

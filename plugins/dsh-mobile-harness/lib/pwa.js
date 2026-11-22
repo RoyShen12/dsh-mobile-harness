@@ -7,14 +7,28 @@ import { compressBuffer, compressionHeaders, isCompressibleType, MIN_COMPRESS_BY
 const SAFE_AREA_STYLE = `<style id="dsh-pwa-safe-area">
 html[data-dsh-pwa-ios] body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:#0e1014;pointer-events:none;z-index:2147483647}
 html:not([data-dru-mobile]) #root{box-sizing:border-box;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
-/* Narrow portrait displays can have a centered cutout: keep the full top inset
-   so titles and session actions stay clear, rather than shifting only corner chrome. */
-@media(display-mode:fullscreen) and (width > 640px), (display-mode:fullscreen) and (orientation:landscape){
+@media(display-mode:fullscreen){
 html[data-dsh-pwa-android]:not([data-dru-mobile]) #root{padding-top:0}
-/* Keep frame/glass at y=0. Corner chrome moves below the cutout and stays
-   above later-painted body content, so its translated controls remain hit-testable. */
-html[data-dsh-pwa-android]:not([data-dru-mobile]) header[data-window-drag] [class$="_headerCorner"],
 html[data-dsh-pwa-android]:not([data-dru-mobile]) [data-sidebar-right-panel="fullscreen"][data-sidebar-right-open="true"] [class*="_stripChrome_"]:has([data-sidebar-right-toggle]){translate:0 max(0px,calc(env(safe-area-inset-top,0px) - 8px));position:relative;z-index:2}
+}
+@media(display-mode:fullscreen) and (width <= 640px) and (orientation:portrait){
+/* The web exposes the top inset, not the cutout's horizontal bounds. Leave a
+   small center corridor on narrow portrait displays, with controls on both sides. */
+html[data-dsh-pwa-android]:not([data-dru-mobile]) header[data-window-drag] [class$="_titleRow"]:has(> [class$="_titleCluster"] [class$="_crumbs"]){
+  --dsh-cutout-half:min(env(safe-area-inset-top,0px),18px);
+  --dsh-title-start:28px;
+  display:grid;grid-template-columns:minmax(0,calc(50vw - 20px - var(--dsh-title-start) - var(--dsh-cutout-half))) calc(2 * var(--dsh-cutout-half)) minmax(0,1fr) auto auto;
+  padding-inline:var(--dsh-title-start) 0;margin-inline-end:-16px;
+}
+html[data-dsh-pwa-android]:not([data-dru-mobile]) header[data-window-drag] [class$="_titleCluster"]:has(> [class$="_crumbs"]){display:contents}
+html[data-dsh-pwa-android]:not([data-dru-mobile]) header[data-window-drag] [class$="_titleCluster"] > [class$="_crumbs"]{grid-column:1;min-width:0;margin-inline-end:0}
+html[data-dsh-pwa-android]:not([data-dru-mobile]) header[data-window-drag] [class$="_titleCluster"] > [class$="_headerActions"]{grid-column:3;min-width:0;gap:2px;overflow:clip}
+html[data-dsh-pwa-android]:not([data-dru-mobile]) header[data-window-drag] [class$="_titleRow"]:has(> [class$="_titleCluster"] [class$="_crumbs"]) > [class$="_headerUtilities"]{grid-column:4;gap:2px;margin:0}
+html[data-dsh-pwa-android]:not([data-dru-mobile]) header[data-window-drag] [class$="_titleRow"]:has(> [class$="_titleCluster"] [class$="_crumbs"]) > [class$="_headerCorner"]{grid-column:5;margin:0}
+}
+@media(display-mode:fullscreen) and (width > 640px), (display-mode:fullscreen) and (orientation:landscape){
+/* Wide and landscape layouts retain the existing corner-only adjustment. */
+html[data-dsh-pwa-android]:not([data-dru-mobile]) header[data-window-drag] [class$="_headerCorner"]{translate:0 max(0px,calc(env(safe-area-inset-top,0px) - 8px));position:relative;z-index:2}
 }
 </style>`
 const DEFAULT_VIEWPORT = '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
