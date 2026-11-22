@@ -225,7 +225,7 @@ globalThis.__ModuleLoader__.load({
     }
 
     const CSS = `
-.dru-page{box-sizing:border-box;height:100%;overflow:auto;padding:40px 48px 64px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1)}
+.dru-page{container:dsh-remote-panel / inline-size;box-sizing:border-box;height:100%;overflow:auto;padding:clamp(24px,4vh,40px) clamp(16px,5%,48px) 48px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1)}
 .dru-header{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;max-width:820px}
 .dru-title{margin:0;font-size:22px;line-height:30px;font-weight:600}
 .dru-subtitle{margin:6px 0 0;font-size:13px;line-height:20px;color:var(--dsw-alias-label-secondary)}
@@ -374,7 +374,21 @@ globalThis.__ModuleLoader__.load({
 .dru-qr-ghost{width:56px;height:56px;opacity:.3}
 .dru-qr-empty-text{font-size:11.5px;line-height:1.6;text-align:center;padding:0 6px}
 html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
-@media (max-width:760px){.dru-page{padding:24px 18px 48px}.dru-body{flex-direction:column}.dru-left{width:100%}.dru-body{flex-direction:column;gap:14px}.dru-body>.dru-left{width:100%}.dru-qr{width:220px;height:220px;margin:0 auto}.dru-qr-hint{max-width:220px;margin:8px auto 0}.dru-field{flex-direction:column;gap:6px}.dru-field-label{width:auto;padding-top:0}.dru-hero{flex-direction:column;gap:12px}.dru-card{padding:14px 14px 16px}
+@container dsh-remote-panel (width <= 640px){
+  .dru-body{flex-direction:column;gap:14px}.dru-body>.dru-left,.dru-conn-right{width:100%}
+  .dru-qr{width:min(100%,220px);height:auto;aspect-ratio:1;margin:0 auto}.dru-qr-hint{max-width:220px;margin:8px auto 0}
+  .dru-field{flex-direction:column;gap:6px}.dru-field-label{width:auto;padding-top:0}
+  .dru-hero{flex-direction:column;gap:12px}.dru-card{padding:14px 14px 16px}
+  .dru-tab-bar{flex-wrap:wrap}.dru-tab-meta{margin-inline-start:auto}
+}
+.dru-dialog{max-block-size:100%;overflow:auto;overscroll-behavior:contain}
+.dru-dialog-actions{flex-wrap:wrap}
+@media(any-pointer:coarse){
+  .dru-page > *{margin-inline:auto}
+  .dru-button,.dru-seg-btn,.dru-dialog-btn,.dru-tab-btn{min-block-size:44px;padding-inline:12px}
+  .dru-input{min-block-size:44px;min-inline-size:0;font-size:16px}
+}
+@media (max-width:760px){
 /* The macOS frame delegates top-strip clearance to the main panel content. */
 html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-clearance,0px))}}
 `

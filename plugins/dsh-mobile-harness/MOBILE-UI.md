@@ -22,6 +22,14 @@
 
 验证：Duo / iOS 27.2 模拟器 Safari 外屏登录页核对了右上挖孔、侧边栏和完整登录卡片。已登录的 Chromium 触屏模拟在同一页面切换 382×580、669×867、951×585、385×571、594×368 并回到外屏，没有检测到输入区或用量栏横向溢出。以上尺寸来自 Safari 标签页基准；Duo 主屏幕安装态、物理折叠/展开、半折与真机键盘尚未实测。
 
+## iPad mini / iPad Pro
+
+按 Safari 窗口和面板的实际宽度适配，包括竖屏、横屏和分窗。[iPad Safari 可以发送与 Mac 相同的 User-Agent](https://developer.apple.com/videos/play/wwdc2019/203/)，因此自动档保留宿主响应式视口；显式保存的单设备档位始终生效，只有兼容档固定为 1280 CSS px。
+
+「远程」面板按实际列宽调整边距和布局：侧栏或分窗压窄内容时改为单列，宽窗内保持舒适行长。触控设备的标签、操作按钮与输入框至少 44 CSS px 高，输入字体为 16 CSS px；短窗口里的设备审批弹窗可滚动。
+
+iPadOS 27.2 的 mini、Pro 11 英寸及 13 英寸模拟器已核对 Safari 登录页；已登录的触屏浏览器模拟覆盖三种尺寸的横竖屏及 430 CSS px 窄窗，远程面板没有横向溢出，标签触控高度为 44 CSS px。iPad 真机、主屏幕安装态及系统键盘、触控板尚未实测。
+
 ## PWA 沉浸式显示
 
 PWA manifest 优先 `fullscreen` 并显式回退 `standalone`；远程「界面 → 沉浸式显示」使用 `window.__dshPwa` 的本地视图 API。页面全屏只由点击触发，保留进入 / 退出、浏览器错误和 `fullscreenchange` / display-mode 订阅；退出或焦点恢复时不自动请求全屏，无新增 observer、rAF 循环或轮询。
