@@ -2,7 +2,7 @@ globalThis.__ModuleLoader__.load({
   id: 'dsh-mobile-harness',
   chunk: 'client.mobile-skin.js',
   factory() {
-const MOBILE_SKIN_VERSION = '2.2.3'
+const MOBILE_SKIN_VERSION = '2.2.4'
 
 const EDGE_SWIPE_ZONE = 64
 const MOBILE_QUERY = '(max-width: 640px), (any-pointer: coarse) and (max-width: 1366px)'
@@ -143,7 +143,7 @@ function hasNativeMobileLayout(version) {
   return !match[4] || Boolean(candidate && Number(candidate[1]) >= 1)
 }
 
-function installMobileSkin(css) {
+function installMobileSkin(css, nativeComposerCss) {
   if (typeof css !== 'string' || !css) throw new Error('Mobile stylesheet unavailable')
   const query = window.matchMedia(MOBILE_QUERY)
   const hostVersion = globalThis.__DSH_BOOT__?.release?.version
@@ -151,13 +151,22 @@ function installMobileSkin(css) {
   let activeSkin = null
   let navFold = null
   let nativeProbe = null
+  let composerStyle = null
   const sync = () => {
     // Unversioned custom builds can publish the native drawer after plugin activation.
     if (!nativeLayout) {
       const frame = document.querySelector('[data-sidebar-drawer]')
       nativeLayout = Boolean(frame?.querySelector('[data-sidebar-mask]') && frame.querySelector('[data-sidebar-opener]'))
     }
-    if (nativeLayout) nativeProbe?.disconnect()
+    if (nativeLayout) {
+      nativeProbe?.disconnect()
+      if (!composerStyle && nativeComposerCss) {
+        composerStyle = document.createElement('style')
+        composerStyle.id = 'dsh-mobile-native-composer'
+        composerStyle.textContent = nativeComposerCss
+        document.head.appendChild(composerStyle)
+      }
+    }
     const forced = forcedUiMode()
     const want = !nativeLayout && (forced ? forced !== 'compat' : !compatCanvas() && query.matches)
     if (want && !activeSkin) {
@@ -191,6 +200,7 @@ function installMobileSkin(css) {
   return () => {
     query.removeEventListener('change', sync)
     nativeProbe?.disconnect()
+    composerStyle?.remove()
     navFold?.()
     navFold = null
     activeSkin?.dispose()

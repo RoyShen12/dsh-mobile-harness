@@ -1226,6 +1226,36 @@ html[data-dru-mobile][data-dru-skin-state="ready"].dru-overlay-open body {
   }
 }
 `;
-    return { MOBILE_CSS };
+    // Keep the host's responsive shell; only adapt the native composer on narrow screens.
+    const NATIVE_COMPOSER_CSS = String.raw`
+@media (max-width: 640px) {
+  [data-slot="conversation.input.model"] {
+    --dsh-composer-model-text-display: block;
+    --dsh-composer-model-icon-display: none;
+  }
+  [data-slot="conversation.input.model"] button {
+    max-inline-size: min(42vw, 220px);
+  }
+  [data-slot="conversation.input.model"] :is(.lgmp-effort, .qol-effort-name) {
+    display: none;
+  }
+  [data-composer-placeholder] {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  :is([data-composer-input], textarea):has(+ [data-composer-placeholder]) {
+    min-block-size: calc(2lh + 11px);
+  }
+  [data-composer-dock] {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  [data-composer-dock] :is([data-composer-stat], .dshbill-anchor, [data-slot="conversation.composer.dock"] > span) {
+    flex: 0 0 auto;
+    max-inline-size: 100%;
+  }
+}
+`;
+    return { MOBILE_CSS, NATIVE_COMPOSER_CSS };
   }
 });

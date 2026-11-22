@@ -2474,13 +2474,13 @@ html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-
           }
           let disposed = false
           let dispose
-          // Skin 2.2.3: native hosts own layout; legacy mobile defers posture animation until resize settles.
+          // Skin 2.2.4: adapt the native composer without replacing the responsive shell.
           Promise.all([
             require.async('./client.mobile-skin.js'),
             require.async('./client.mobile-styles.js')
           ]).then(([skin, styles]) => {
             if (disposed) return
-            dispose = skin.installMobileSkin(styles.MOBILE_CSS)
+            dispose = skin.installMobileSkin(styles.MOBILE_CSS, styles.NATIVE_COMPOSER_CSS)
           }).catch((error) => {
             console.warn('dsh-mobile-harness: mobile skin chunk failed to load', error)
           })
