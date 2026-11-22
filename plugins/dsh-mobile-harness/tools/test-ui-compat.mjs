@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import { test } from 'node:test'
 import { hasNativeMobileLayout, readHostRelease } from '../lib/ui-compat.js'
-import { injectViewport } from '../lib/proxy.js'
+import { injectViewport, selectGatewayUiMode } from '../lib/proxy.js'
 import { injectPwa } from '../lib/pwa.js'
 
 const source = readFileSync(new URL('../lib/client.mobile-skin.js', import.meta.url), 'utf8')
@@ -118,6 +118,20 @@ test('gateway preserves native viewport while legacy skin keeps resizes-content'
   assert.doesNotMatch(native, /interactive-widget/)
   assert.match(injectViewport(htmlFor('0.2.1-rc.5'), 'phone'), /interactive-widget=resizes-content/)
   assert.match(injectViewport(htmlFor('0.2.2-rc.1'), 'compat'), /width=1280/)
+})
+
+test('desktop-class iPad UA preserves the viewport in auto and respects per-device modes', () => {
+  const ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/26.0 Safari/605.1.15'
+  const html = htmlFor('0.2.2-rc.5')
+  assert.equal(injectViewport(html, selectGatewayUiMode(undefined, 'auto', ua)), html)
+  assert.equal(injectViewport(html, selectGatewayUiMode(undefined, 'compat', ua)), html)
+  const tablet = injectViewport(html, selectGatewayUiMode('tablet', 'compat', ua))
+  assert.match(tablet, /data-dru-ui="tablet"/)
+  assert.match(tablet, /width=device-width/)
+  const compat = injectViewport(html, selectGatewayUiMode('compat', 'auto', ua))
+  assert.match(compat, /data-dru-ui="compat"/)
+  assert.match(compat, /width=1280/)
+  assert.equal(selectGatewayUiMode(undefined, 'auto', `${ua} Mobile/15E148`), 'tablet')
 })
 
 test('native PWA metadata is replaced once while boot release remains readable', () => {

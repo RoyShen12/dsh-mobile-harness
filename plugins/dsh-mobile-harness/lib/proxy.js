@@ -165,28 +165,38 @@ export function resolveUiMode(mode, userAgent) {
   return 'compat'
 }
 
+/** iPadOS can send the same User-Agent as macOS; only an explicit per-device choice
+ * overrides an otherwise ambiguous request. Auto preserves the host's responsive viewport. */
+export function selectGatewayUiMode(deviceMode, defaultMode, userAgent) {
+  const ua = String(userAgent || '')
+  const explicit = deviceMode === 'phone' || deviceMode === 'tablet' || deviceMode === 'compat'
+  if (!explicit && !PHONE_UA.test(ua) && !TABLET_UA.test(ua)) return null
+  return resolveUiMode(deviceMode ?? defaultMode, ua)
+}
+
 /** Preserve native host viewport behavior; older hosts use the legacy skin's keyboard resize policy. */
 export function injectViewport(html, mode) {
-  let text = String(html)
+  const text = String(html)
+  if (mode !== 'phone' && mode !== 'tablet' && mode !== 'compat') return text
+  const tagged = text.replace(/<html([^>]*)>/i, '<html$1 data-dru-ui="' + mode + '">')
   if (mode === 'phone' || mode === 'tablet') {
     // Native width: the in-page mobile skin needs a real 390-430px CSS viewport to engage, and
     // scaling a fixed 1280 canvas down is exactly what made text unreadably small. `data-dru-ui`
     // tells the page which layout the gateway chose, so the skin never has to re-guess it.
-    text = text.replace(/<html([^>]*)>/i, '<html$1 data-dru-ui="' + mode + '">')
     const found = /<meta[^>]*\bname=["']viewport["'][^>]*>/i
     if (hasNativeMobileLayout(readHostRelease(text))) {
       // The new host owns keyboard resize, zoom, safe areas, and native navigation.
-      return found.test(text) ? text : text.replace(/<head[^>]*>/i, (tag) => tag + '<meta name="viewport" content="width=device-width, initial-scale=1" />')
+      return found.test(tagged) ? tagged : tagged.replace(/<head[^>]*>/i, (tag) => tag + '<meta name="viewport" content="width=device-width, initial-scale=1" />')
     }
     const native = '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content, user-scalable=yes" />'
-    return found.test(text) ? text.replace(found, native) : text.replace(/<head[^>]*>/i, (tag) => tag + native)
+    return found.test(tagged) ? tagged.replace(found, native) : tagged.replace(/<head[^>]*>/i, (tag) => tag + native)
   }
   // compat: the pre-skin behaviour — a fixed desktop canvas the phone scales down. It is the
   // fallback for devices where the skin's selectors no longer match, not the default.
   const width = UI_VIEWPORTS.compat
   const meta = '<meta name="viewport" content="width=' + width + ', maximum-scale=5, user-scalable=yes" />'
   const existing = /<meta[^>]*\bname=["']viewport["'][^>]*>/i
-  return existing.test(text) ? text.replace(existing, meta) : text.replace(/<head[^>]*>/i, (tag) => tag + meta)
+  return existing.test(tagged) ? tagged.replace(existing, meta) : tagged.replace(/<head[^>]*>/i, (tag) => tag + meta)
 }
 
 /** The browser form posts urlencoded; the in-page poller posts JSON. Accept both. */
@@ -2419,12 +2429,7 @@ export class GatewayProxy {
     headers = this.responseHeaders(req, status, headers)
     const ua = String(req.headers['user-agent'] || '')
     // A phone that picked its own layout wins over the global default.
-    const uiMode = resolveUiMode(this.options.getDeviceUiMode?.(device?.id) ?? this.options.getUiMode?.(), ua)
-    // Remember what "auto" resolved to on the last phone/tablet navigation, so the panel can
-    // say "this is what auto picks" instead of leaving the owner to guess.
-    if (PHONE_UA.test(ua) || TABLET_UA.test(ua)) {
-      this.uiProbe = { mode: uiMode, at: Date.now(), label: describeUserAgent(ua) }
-    }
+    const uiMode = selectGatewayUiMode(this.options.getDeviceUiMode?.(device?.id), this.options.getUiMode?.(), ua)
     const rewriteHtml = status === 200
       && req.method === 'GET'
       && /text\/html/i.test(String(headers['content-type'] || ''))
@@ -2434,7 +2439,10 @@ export class GatewayProxy {
       upstreamRes.on('data', (chunk) => chunks.push(chunk))
       upstreamRes.on('end', () => {
         let html = Buffer.concat(chunks).toString('utf8')
-        if (PHONE_UA.test(ua) || TABLET_UA.test(ua)) html = injectViewport(html, uiMode)
+        if (uiMode) {
+          this.uiProbe = { mode: uiMode, at: Date.now(), label: describeUserAgent(ua) }
+          html = injectViewport(html, uiMode)
+        }
         // Every gateway page can be installed, including an iPad requesting desktop mode.
         let body = Buffer.from(injectPwa(html), 'utf8')
         let outHeaders = { ...headers, 'cache-control': 'no-store' }
