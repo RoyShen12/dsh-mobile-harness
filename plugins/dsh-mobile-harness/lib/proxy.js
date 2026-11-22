@@ -1423,9 +1423,9 @@ export class GatewayProxy {
 <meta name="theme-color" content="#0e1014"/>
 <title>DeepSeek Harness · 等待确认</title>
 <style>
-  html,body{margin:0;min-height:100%;background:#0e1014;color:#e8eaee;font-family:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;display:flex;align-items:center;justify-content:center}
-  body{box-sizing:border-box;min-height:100dvh;padding:max(12px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left))}
-  .card{box-sizing:border-box;width:min(92vw,400px);background:#171a21;border:1px solid #2c323d;border-radius:14px;padding:26px 22px;box-shadow:0 18px 60px #0008;text-align:center}
+  html,body{margin:0;background:#0e1014;color:#e8eaee;font-family:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif}
+  body{display:grid;place-items:center;box-sizing:border-box;min-height:100vh;min-height:100dvh;padding:max(12px,env(safe-area-inset-top,0px)) max(12px,env(safe-area-inset-right,0px)) max(12px,env(safe-area-inset-bottom,0px)) max(12px,env(safe-area-inset-left,0px))}
+  .card{box-sizing:border-box;width:min(100%,400px);min-width:0;background:#171a21;border:1px solid #2c323d;border-radius:14px;padding:26px 22px;box-shadow:0 18px 60px #0008;text-align:center}
   h1{font-size:17px;margin:0 0 8px;font-weight:650}
   p{font-size:12px;color:#9aa3b2;margin:0 0 12px;line-height:1.6}
   .code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:32px;font-weight:600;letter-spacing:.22em;color:#e8b339;margin:16px 0 8px}
@@ -1674,12 +1674,12 @@ export class GatewayProxy {
 <meta name="theme-color" content="#0e1014"/>
 <title>DeepSeek Harness · 远程访问</title>
 <style>
-  html,body{margin:0;height:100%;background:#0e1014;color:#e8eaee;font-family:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;display:flex;align-items:center;justify-content:center}
-  body{box-sizing:border-box;min-height:100dvh;padding:max(12px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left))}
-  form{box-sizing:border-box;width:min(92vw,360px);background:#171a21;border:1px solid #2c323d;border-radius:14px;padding:26px 22px;box-shadow:0 18px 60px #0008}
+  html,body{margin:0;background:#0e1014;color:#e8eaee;font-family:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif}
+  body{display:grid;place-items:center;box-sizing:border-box;min-height:100vh;min-height:100dvh;padding:max(12px,env(safe-area-inset-top,0px)) max(12px,env(safe-area-inset-right,0px)) max(12px,env(safe-area-inset-bottom,0px)) max(12px,env(safe-area-inset-left,0px))}
+  form{box-sizing:border-box;width:min(100%,360px);min-width:0;background:#171a21;border:1px solid #2c323d;border-radius:14px;padding:26px 22px;box-shadow:0 18px 60px #0008}
   h1{font-size:17px;margin:0 0 6px;font-weight:650}
   p{font-size:12px;color:#9aa3b2;margin:0 0 18px;line-height:1.6}
-  input{width:100%;box-sizing:border-box;background:#11141a;border:1px solid #2c323d;color:#e8eaee;border-radius:9px;padding:12px 13px;font-size:15px;margin-bottom:12px}
+  input{width:100%;box-sizing:border-box;background:#11141a;border:1px solid #2c323d;color:#e8eaee;border-radius:9px;padding:12px 13px;font-size:16px;margin-bottom:12px}
   input:focus{outline:none;border-color:#4c8dff}
   button{width:100%;border:0;border-radius:9px;padding:12px;font-size:14px;font-weight:650;background:#4c8dff;color:#08101f;cursor:pointer}
   .err{color:#ff8a70;font-size:12px;min-height:16px;margin-bottom:8px}
@@ -1689,7 +1689,7 @@ export class GatewayProxy {
   <h1>DeepSeek Harness · 远程访问</h1>
   <p>请输入远程访问密码。这是本机网关的独立口令，与 DeepSeek 账号无关。</p>
   <div class="err">${safeNotice}</div>
-  <input type="password" name="password" placeholder="访问密码" autocomplete="current-password" value="${safePrefill}" autofocus required/>
+  <input type="password" name="password" placeholder="访问密码" autocomplete="current-password" value="${safePrefill}" required/>
   <button type="submit">进入</button>
   <div class="hint">仅限本人设备使用。第一次登录的浏览器和 App 一样：密码正确后，要在电脑「远程 → 设备准入」里核对 6 位配对码再点「允许」。扫码进入时会自动登录。</div>
 </form>
