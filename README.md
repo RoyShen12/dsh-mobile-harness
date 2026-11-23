@@ -35,7 +35,7 @@
 - ①cloudflare(免注册、免费、最省事、代价是每次重启DSH需要重新扫码登录)
 - ②外部隧道(内网穿透、需注册、可能付费、需实名，但好处是最稳定且重启DSH后保留原本的登录，无需再次扫码)
 - ③Tailscale(手机电脑需额外软件，数据走的境外服务器，延迟高，不推荐，需注册)
-- ④LAN（保留旧版网卡选项；当前安全策略要求手机通过受信任的 HTTPS 入口登录）
+- ④LAN（使用 HTTP 直连，适合可信局域网或虚拟组网）
 - ⑤仅本机(只监听 127.0.0.1，用于本机访问，手机连不上)
 
 **手机不一定需要 App。** 使用浏览器(最好使用chrome)扫一下面板上的二维码、确认一次，就能接着用电脑上的同一个DSH。
@@ -73,7 +73,7 @@
 
 ### 安全
 
-- 默认和隧道入口下，网关只监听 `127.0.0.1`，由用户选择的隧道提供远程 HTTPS。插件保留旧的局域网网卡模式，但网关拒绝非回环的明文 HTTP 登录。
+- 默认和隧道入口下，网关只监听 `127.0.0.1`，由用户选择的隧道提供远程 HTTPS。局域网入口允许内网 IPv4 客户端使用明文 HTTP，仅适合可信网络，请勿将端口转发到公网。
 - 三层准入：密码 → 6 位配对码两端核对 → 设备白名单。
 - **扫码不等于放行**：扫完落地的是等待页，页面上那串配对码要和你电脑面板上的一致，点了「允许」才真正进站。
 - 移除 = 立刻断开 + 撤销信任，下次要重新配对；拉黑 = 永久拒绝。
@@ -132,7 +132,7 @@ Set-Location .\dsh-mobile-harness
 | --- | --- | --- | --- |
 | **SakuraFrp / 任意外部隧道** | ✅ **推荐** | 已有一条 frp 隧道，填外网地址（如 `https://frp-cat.com:12345/`） | 地址稳定，延迟低；「自动检测」会去读 SakuraFrp 的运行日志 |
 | **Cloudflare 快速隧道** | ✅ **推荐（零准备）** | 什么都不用 | 免账号、一键建隧道；地址每次重启都变，换地址要重新扫码；首次要下约 50 MB 的 cloudflared |
-| **局域网 / 虚拟组网** | 旧版入口 | 手机接入请选择 HTTPS 隧道 | 网卡列表仍可查看。非回环 HTTP 登录会被网关拒绝 |
+| **局域网 / 虚拟组网** | 适合可信内网 | 双方接入同一局域网或虚拟组网 | 使用面板上的 HTTP 地址；跨网访问请选 HTTPS 隧道 |
 | **仅本机** | 本机访问 | 浏览器与 DSH 位于同一电脑 | 仅监听回环地址，手机通过 HTTPS 隧道接入 |
 | **Tailscale** | ⚠️ **不推荐** | 两端都装 Tailscale、登录同一账号 | 能穿透 NAT，但流量常走 DERP 中继，延迟明显偏高；只在内网直连（同一局域网 / 同一 VPC）时才顺 |
 
@@ -149,13 +149,13 @@ Set-Location .\dsh-mobile-harness
 不用。浏览器扫码就能用，App 只是把相机扫码、密码记忆、下载落盘这几件事做得更顺。
 
 **手机上一直转圈 / 打不开？**
-先确认入口为 HTTPS 且证书受信任；公网入口要等隧道状态变成「已连接」。遇到证书错误时检查域名、证书链与隧道配置。
+内网直连请使用面板显示的 `http://` 地址，并确认双方网络互通。公网入口要等隧道状态变成「已连接」；遇到证书错误时检查域名、证书链与隧道配置。
 
 **连不上，但不知道断在哪一段？**
 面板「网络入口」下的 **一键自检** 会逐段检查总开关、网关、DSH 本体、隧道、外网地址和设备准入。红色那行指出断点，并给出处理建议。
 
 **手机打开局域网地址时提示 HTTPS required？**
-网关拒绝非回环的明文 HTTP。请改用具有受信任证书的 HTTPS 入口，无需为这个错误开放 Windows 防火墙端口。
+请更新插件，选择「局域网 / 虚拟组网」并重新打开总开关，再用面板上的 HTTP 地址访问。
 
 **扫码后停在「等待同意」？**
 这是设计。去电脑面板「设备准入」，核对那串 6 位数字，一致再点「允许」。
@@ -230,7 +230,7 @@ assets/                    README 截图
 
 **No app required.** Any browser can scan the QR code, type the password, and continue the same desktop session. The 4 MB Android app is optional: camera scanning, remembered passwords, download-to-phone. **The native app is Android-only for now** — on iOS / iPadOS and HarmonyOS, just use the built-in browser (same gateway, same admission control, add to home screen as a PWA).
 
-- Phone access requires trusted HTTPS via an external tunnel, Cloudflare quick tunnel, or Tailscale Serve. Loopback HTTP is for use on the computer itself.
+- LAN mode supports plain HTTP on trusted private IPv4 networks. Use trusted HTTPS via an external tunnel, Cloudflare quick tunnel, or Tailscale Serve for public access.
 - Pairing: password → 6-digit code shown on both ends → device allow-list. Scanning a QR never grants access by itself.
 - Admission control: online limit, pending queue, remove / block devices, kick-all.
 

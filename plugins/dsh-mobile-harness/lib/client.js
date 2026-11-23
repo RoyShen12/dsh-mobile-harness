@@ -1589,7 +1589,7 @@ html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-
           : status?.tunnel === 'none'
             ? '不起隧道，只监听本机端口；手机连不上，适合在本机调试。'
             : status?.tunnel === 'lan'
-              ? '手机和电脑连同一个 Wi-Fi，或先连上皎月连 / ZeroTier 这类虚拟组网；网关会监听所有网卡，二维码用下面列表里的第一个地址。'
+              ? '手机和电脑接入同一个可信局域网或虚拟组网。此入口使用明文 HTTP，请勿开放到公网。'
               : '需要本机已登录 Tailscale，并已把这个网关端口 serve 出去。不推荐：走 DERP 中继时延迟高，能用外部隧道或 Cloudflare 就别用它。'
       const connectTip = enabled
         ? (status?.tunnel === 'external'
@@ -1599,7 +1599,7 @@ html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-
               : status?.tunnel === 'none'
                 ? '当前只有本机能访问，手机连不上。'
                 : status?.tunnel === 'lan'
-                  ? '手机要和电脑在同一网段；用虚拟组网就先确认两端连着同一个网络。主地址进不去就换列表里另一个地址。'
+                  ? '请用面板显示的 HTTP 地址。若当前地址连不上，到「网络入口 → 本机地址」选择可达的网卡。'
                   : '手机需安装 Tailscale 并登录同一账号；走中继时延迟会明显偏高。')
         : '打开开关后生成二维码：一次性票据（10 分钟），请保管好截图，并在电脑核对配对码。'
 
@@ -1852,7 +1852,7 @@ html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-
                     'div',
                     { className: CLS.lanBox },
                     (status?.lanAddresses || []).length === 0
-                      ? h('span', { className: CLS.value }, '没找到非回环 IPv4 地址')
+                      ? h('span', { className: CLS.value }, '没找到内网 IPv4 地址')
                       : (status?.lanAddresses || []).map((entry) =>
                           h(
                             'div',

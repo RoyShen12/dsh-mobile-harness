@@ -15,6 +15,7 @@ import { compressBuffer, compressionHeaders, compressionFor, createEncoder, isCo
 import { injectPwa, servePwa } from './pwa.js'
 import { connectUpstream, parseUpstreamOrigin, requestUpstream } from './upstream.js'
 import { hasNativeMobileLayout, readHostRelease } from './ui-compat.js'
+import { isLanIpv4 } from './lan.js'
 
 const SESSION_COOKIE = 'dsh-gw'
 
@@ -493,13 +494,21 @@ export class GatewayProxy {
     return false
   }
 
-  publicEndpointAllowed() {
+  publicOriginAllowed(url) {
+    if (url.protocol === 'https:') return true
+    return url.protocol === 'http:' && (['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname)
+      || (this.options.getTunnelMode?.() === 'lan' && isLanIpv4(url.hostname)))
+  }
+
+  publicEndpointAllowed(req) {
     try {
       const publicUrl = this.options.getPublicUrl?.()
+      if (this.options.getTunnelMode?.() === 'lan') {
+        const peer = parseIp(req.socket?.remoteAddress)?.replace(/^::ffff:/, '')
+        if (typeof publicUrl !== 'string' || (peer !== '127.0.0.1' && !isLanIpv4(peer))) return false
+      }
       if (typeof publicUrl !== 'string') return true
-      const parsed = new URL(publicUrl)
-      if (parsed.protocol === 'https:') return true
-      return parsed.protocol === 'http:' && ['localhost', '127.0.0.1', '::1', '[::1]'].includes(parsed.hostname.toLowerCase())
+      return this.publicOriginAllowed(new URL(publicUrl))
     } catch {
       return false
     }
@@ -1015,9 +1024,7 @@ export class GatewayProxy {
       const publicUrl = this.options.getPublicUrl?.()
       if (typeof publicUrl === 'string') {
         const expected = new URL(publicUrl)
-        const expectedLoopback = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(expected.hostname.toLowerCase())
-        if (expected.protocol === 'https:' && expected.origin === parsed.origin) return true
-        if (expected.protocol === 'http:' && expectedLoopback && expected.origin === parsed.origin) return true
+        if (expected.origin === parsed.origin && this.publicOriginAllowed(expected)) return true
       }
     } catch {
       return false
@@ -2189,7 +2196,7 @@ export class GatewayProxy {
 
   handle(req, res) {
     try {
-      if (!this.publicEndpointAllowed()) {
+      if (!this.publicEndpointAllowed(req)) {
         this.serveText(res, 403, 'HTTPS required.\n')
         return
       }
@@ -2499,7 +2506,7 @@ export class GatewayProxy {
 
   handleUpgrade(req, socket) {
     try {
-      if (!this.publicEndpointAllowed()) {
+      if (!this.publicEndpointAllowed(req)) {
         socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
         return
       }

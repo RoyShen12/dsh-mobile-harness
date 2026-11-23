@@ -182,11 +182,11 @@ async function main() {
       const list = collectLanAddresses()
       const chosen = pickLanAddress(list, state.lanAddress)
       if (!list.length) {
-        add('lan', '局域网入口', 'fail', '没找到非回环 IPv4 地址', '电脑没连网络？')
+        add('lan', '局域网入口', 'fail', '没找到内网 IPv4 地址', '检查电脑是否已连接局域网或虚拟组网')
       } else {
         add('lan', '局域网入口', 'warn', list.map((entry) => entry.address + '（' + entry.name + '）' + (entry.address === chosen ? ' ← 二维码用这个' : '')).join('，'), '地址不对就到面板「网络入口 → 本机地址」点「用这个」换一条；手机必须和电脑在同一网段')
       }
-      add('lan-gw', '局域网登录', 'fail', '网关拒绝非回环的明文 HTTP 登录', '手机接入请选择受信任的 HTTPS 隧道；仅在电脑上使用请选择「仅本机」')
+      add('lan-gw', '局域网登录', 'warn', 'HTTP 不加密，仅在信任的内网使用', '跨网访问请选择 HTTPS 隧道')
     } else if (tunnel === 'tailscale') {
       add('tailscale', 'Tailscale', 'warn', '命令行版读不到 Tailscale 主机名，去面板看', '本机运行 tailscale up 并登录')
     } else {

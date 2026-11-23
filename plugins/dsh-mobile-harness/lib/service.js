@@ -951,7 +951,7 @@ export class RemoteService {
         else add('public', '外网地址', 'fail', this.publicUrl + ' 连不上（' + hit.error + '）', 'quick 隧道地址每次重启都会变，重新扫码')
       }
     } else if (this.state.tunnel === 'lan') {
-      add('lan-transport', '局域网登录', 'fail', '网关拒绝非回环的明文 HTTP 登录', '手机接入请选择受信任的 HTTPS 隧道；仅在电脑上使用请选择「仅本机」')
+      add('lan-transport', '局域网登录', 'warn', 'HTTP 不加密，仅在信任的内网使用', '跨网访问请选择 HTTPS 隧道')
       const addresses = this.lanAddresses()
       const chosen = this.preferredLanAddress()
       if (addresses.length) {
@@ -963,7 +963,7 @@ export class RemoteService {
           add('lan-pick', '记住的地址', 'warn', '记住的 ' + this.state.lanAddress + ' 现在不在线，已临时改用 ' + chosen, '网卡拔了或虚拟组网没连；重新连上后会自动回到它')
         }
       } else {
-        add('lan', '本机地址', 'fail', '没找到非回环 IPv4', '电脑没连网络？')
+        add('lan', '本机地址', 'fail', '没找到内网 IPv4', '检查电脑是否已连接局域网或虚拟组网')
       }
     } else if (this.state.tunnel === 'tailscale') {
       if (this.tailscale?.dnsName) add('tailscale', 'Tailscale', 'ok', this.tailscale.dnsName + '（' + this.tailscale.backendState + '）', null)

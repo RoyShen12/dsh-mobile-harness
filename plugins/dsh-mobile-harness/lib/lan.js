@@ -6,9 +6,18 @@
  *      否则“二维码用哪个地址”在两处会给出不同答案；
  *   2. rankLanRows / pickLanAddress 是纯函数，可以脱离宿主直接做回归测试。
  *
- * 依赖只有 node:os，所以独立脚本也能 import。
+ * 仅依赖 Node 内置模块，所以独立脚本也能 import。
  */
 import { networkInterfaces } from 'node:os'
+import { isIPv4 } from 'node:net'
+
+export function isLanIpv4(address) {
+  if (!isIPv4(address)) return false
+  const [first, second] = address.split('.').map(Number)
+  return first === 10 || (first === 192 && second === 168)
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 100 && second >= 64 && second <= 127)
+}
 
 /** 网卡名优先级：物理网卡 → 虚拟组网 → 其他 → 虚拟机（永远排最后）。 */
 export function lanAdapterRank(name) {
@@ -43,12 +52,12 @@ export function rankLanRows(rows) {
   )
 }
 
-/** Every non-loopback IPv4 on this machine, best first. */
+/** Private and shared-address IPv4 interfaces, best first. */
 export function collectLanAddresses() {
   const rows = []
   for (const [name, entries] of Object.entries(networkInterfaces())) {
     for (const entry of entries || []) {
-      if (entry.family !== 'IPv4' || entry.internal) continue
+      if (entry.family !== 'IPv4' || entry.internal || !isLanIpv4(entry.address)) continue
       rows.push({ address: entry.address, name })
     }
   }
