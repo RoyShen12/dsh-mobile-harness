@@ -1740,13 +1740,12 @@ export class GatewayProxy {
 
   async bind(preferredPort, host = '127.0.0.1') {
     const candidates = []
-    if (Number.isInteger(preferredPort) && preferredPort > 0) candidates.push(preferredPort)
-    candidates.push(...CANDIDATE_PORTS)
-    for (let attempt = 0; attempt < 40; attempt += 1) {
-      candidates.push(50000 + Math.floor(Math.random() * 15000))
-    }
+    if (Number.isInteger(preferredPort) && preferredPort > 0 && preferredPort <= 65535) candidates.push(preferredPort)
+    // Let the OS allocate the last fallback: Windows can reserve large blocks of ports for
+    // virtualization and NAT, so picking random numbers in the same range may never bind.
+    candidates.push(...CANDIDATE_PORTS, 0)
     let lastError = null
-    for (const port of candidates) {
+    for (const port of new Set(candidates)) {
       const server = http.createServer({ headersTimeout: 10_000, requestTimeout: 30_000, keepAliveTimeout: 5_000 }, (req, res) => this.handle(req, res))
       server.maxConnections = MAX_CONNECTIONS
       server.maxRequestsPerSocket = 256
@@ -1771,10 +1770,10 @@ export class GatewayProxy {
           server.listen(port, host)
         })
         this.server = server
-        this.port = port
+        this.port = server.address().port
         this.startedAt = Date.now()
         await this.bindTls(host)
-        return port
+        return this.port
       } catch (error) {
         lastError = error
         try {
@@ -1795,11 +1794,10 @@ export class GatewayProxy {
     const tlsOptions = this.options.tls
     if (!tlsOptions) return null
     const candidates = []
-    if (Number.isInteger(this.options.tlsPort) && this.options.tlsPort > 0) candidates.push(this.options.tlsPort)
-    candidates.push(64702, 64703, 64704, 64705, 64706)
-    for (let attempt = 0; attempt < 20; attempt += 1) candidates.push(50000 + Math.floor(Math.random() * 15000))
+    if (Number.isInteger(this.options.tlsPort) && this.options.tlsPort > 0 && this.options.tlsPort <= 65535) candidates.push(this.options.tlsPort)
+    candidates.push(64702, 64703, 64704, 64705, 64706, 0)
     let lastError = null
-    for (const port of candidates) {
+    for (const port of new Set(candidates)) {
       let server
       try {
         server = https.createServer({ ...tlsOptions, headersTimeout: 10_000, requestTimeout: 30_000, keepAliveTimeout: 5_000 }, (req, res) => this.handle(req, res))
@@ -1830,9 +1828,9 @@ export class GatewayProxy {
           server.listen(port, host)
         })
         this.tlsServer = server
-        this.tlsPort = port
-        this.options.log?.(`gateway tls listening on 127.0.0.1:${port}`)
-        return port
+        this.tlsPort = server.address().port
+        this.options.log?.(`gateway tls listening on ${host}:${this.tlsPort}`)
+        return this.tlsPort
       } catch (error) {
         lastError = error
         try {

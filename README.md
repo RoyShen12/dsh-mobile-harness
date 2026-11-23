@@ -35,7 +35,7 @@
 - ①cloudflare(免注册、免费、最省事、代价是每次重启DSH需要重新扫码登录)
 - ②外部隧道(内网穿透、需注册、可能付费、需实名，但好处是最稳定且重启DSH后保留原本的登录，无需再次扫码)
 - ③Tailscale(手机电脑需额外软件，数据走的境外服务器，延迟高，不推荐，需注册)
-- ④LAN(局域网/虚拟组网：同一 Wi-Fi，或皎月连、ZeroTier 这类组网，稳定、延迟最低，但距离受网络限制)
+- ④LAN（保留旧版网卡选项；当前安全策略要求手机通过受信任的 HTTPS 入口登录）
 - ⑤仅本机(只监听 127.0.0.1，用于本机访问，手机连不上)
 
 **手机不一定需要 App。** 使用浏览器(最好使用chrome)扫一下面板上的二维码、确认一次，就能接着用电脑上的同一个DSH。
@@ -73,7 +73,7 @@
 
 ### 安全
 
-- 网关只监听 `127.0.0.1`，不监听 `0.0.0.0`、不做端口映射。
+- 默认和隧道入口下，网关只监听 `127.0.0.1`，由用户选择的隧道提供远程 HTTPS。插件保留旧的局域网网卡模式，但网关拒绝非回环的明文 HTTP 登录。
 - 三层准入：密码 → 6 位配对码两端核对 → 设备白名单。
 - **扫码不等于放行**：扫完落地的是等待页，页面上那串配对码要和你电脑面板上的一致，点了「允许」才真正进站。
 - 移除 = 立刻断开 + 撤销信任，下次要重新配对；拉黑 = 永久拒绝。
@@ -83,51 +83,25 @@
 
 ### 0. 你需要
 
-- 一台跑着 DSH 的电脑（Windows / macOS / Linux；本项目在 Windows 11 上开发与实测）
-- DSH ≥ 0.2.1-rc.3，Node ≥ 22
+- 一台跑着 DSH 的电脑（Windows Desktop / macOS Desktop，或 Linux Web）
+- DSH ≥ 0.2.1-rc.3。Desktop 自带 Host 运行时；从命令行打包或运行测试需要 Node ≥ 22。
 - 一个浏览器（手机、平板、另一台电脑都行）；想用相机扫码再准备一台 Android 8.0+
 
 ### 1. 装插件
 
-**方式 A：npm（最快）**
+在 Windows PowerShell 中，克隆本 Fork（已有检出可跳过前两行），取得插件目录的绝对路径：
 
-```bash
-dsh plugin --profile desktop add dsh-mobile-harness
+```powershell
+git clone https://github.com/RoyShen12/dsh-mobile-harness.git
+Set-Location .\dsh-mobile-harness
+(Resolve-Path -LiteralPath .\plugins\dsh-mobile-harness).Path
 ```
 
-**方式 B：一键脚本（从仓库）**
+在 **DSH Desktop → 插件 → 添加插件** 粘贴最后一行输出的路径。路径中有空格或中文时，直接粘贴，无需添加引号。macOS 用同一界面安装该目录；已检出的源码可用 `printf '%s\n' "$PWD/plugins/dsh-mobile-harness"` 取得路径。插件无需预先构建。若要把包转到另一台电脑，在 `plugins/dsh-mobile-harness` 目录执行 `npm pack`，然后在目标电脑的「添加插件」粘贴该 `.tgz` 的绝对路径。
 
-```bash
-git clone https://github.com/afeack/dsh-mobile-harness.git
-cd dsh-mobile-harness
-node scripts/install-plugin.mjs --profile desktop   # 换成你的 profile 名字
-cd ~/.dsh/profiles/desktop && pnpm install
-```
+### 2. 确认插件已启用
 
-脚本会往 profile 的 `package.json` 里写一条依赖和一个 bundle 条目，重复跑是幂等的。
-
-**方式 C：手动改 profile**
-
-profile 在 `~/.dsh/profiles/<名字>`（Windows 是 `%USERPROFILE%\.dsh\profiles\<名字>`），改两处：
-
-```json
-{
-  "dependencies": {
-    "dsh-mobile-harness": "^1.2.0"
-  },
-  "dsh": { "profile": { "bundles": ["...", "dsh-mobile-harness"] } }
-}
-```
-
-`dsh.profile.bundles` 里必须有包名，否则 DSH 不会去加载它。改完在 profile 目录里 `pnpm install`。
-
-**方式 D：离线 tgz**
-
-从 [插件 1.2.0 release](https://github.com/afeack/dsh-mobile-harness/releases/tag/plugin-v1.2.0) 下 `dsh-mobile-harness-1.2.0.tgz`（内容和 npm 包一致），解开到 `<profile>/node_modules/dsh-mobile-harness/`，再把 `dsh-mobile-harness` 写进 `dsh.profile.bundles`；或者 `pnpm add file:./dsh-mobile-harness-1.2.0.tgz`。内网 / 连不上 npm 时用这条。
-
-### 2. 重启 DSH
-
-退出托盘图标，重新打开。会话侧栏会出现「远程」入口，点进去是「远程访问」面板。
+按插件管理器的安装结果操作；只有它提示需要重启时，才退出并重新打开 Desktop。会话侧栏或「更多」中会出现「远程」入口。
 
 ### 3. 选择你的方式、打开开关
 
@@ -158,39 +132,13 @@ profile 在 `~/.dsh/profiles/<名字>`（Windows 是 `%USERPROFILE%\.dsh\profile
 | --- | --- | --- | --- |
 | **SakuraFrp / 任意外部隧道** | ✅ **推荐** | 已有一条 frp 隧道，填外网地址（如 `https://frp-cat.com:12345/`） | 地址稳定，延迟低；「自动检测」会去读 SakuraFrp 的运行日志 |
 | **Cloudflare 快速隧道** | ✅ **推荐（零准备）** | 什么都不用 | 免账号、一键建隧道；地址每次重启都变，换地址要重新扫码；首次要下约 50 MB 的 cloudflared |
-| **局域网 / 虚拟组网** | ✅ **推荐（同网段）** | 手机和电脑同一个 Wi-Fi；或两端都连着皎月连 / ZeroTier 这类虚拟组网 | 网关监听所有网卡，面板列出本机每个 IPv4；**点地址后面的「用这个」可以指定二维码用哪一张网卡**（比如皎月连给的 `10.6.22.1`），选定后二维码立刻改地址、不用重连。不出公网，延迟最低。Windows 首次会弹防火墙，要允许 |
+| **局域网 / 虚拟组网** | 旧版入口 | 手机接入请选择 HTTPS 隧道 | 网卡列表仍可查看。非回环 HTTP 登录会被网关拒绝 |
 | **仅本机** | 本机访问 | 浏览器与 DSH 位于同一电脑 | 仅监听回环地址，手机通过 HTTPS 隧道接入 |
 | **Tailscale** | ⚠️ **不推荐** | 两端都装 Tailscale、登录同一账号 | 能穿透 NAT，但流量常走 DERP 中继，延迟明显偏高；只在内网直连（同一局域网 / 同一 VPC）时才顺 |
 
 **为什么 Tailscale 排最后**：它解决的是「没有公网入口也能连上」，代价是节点绕行——手机到电脑可能先绕到境外中继再回来，打字、翻页都能感觉到卡。**有公网入口就用外部隧道，没有就开 Cloudflare**；Tailscale 留给「内网直连 + 不想开公网」的场景。
 
-第一次接入建议先用「局域网 / 虚拟组网」把扫码和配对码跑通（同一 Wi-Fi 下最快），再切到公网入口。
-
-### 用皎月连 / ZeroTier 连进来
-
-**皎月连/樱花（映射模式，最省事）**
-1. 樱花sakura：
-  ①首先确保自己已经下载且准备好sakuraLauncher
-  ②创建隧道，选择延迟较低的节点
-  ③注意https协议需要选择“自动”，端口设置为插件中提示设置的端口![alt text]({89A2D559-B583-450D-8459-1678AB7EA28B}.png)
-  ![alt text]({63E2D3D1-0AE9-4011-9AA1-C71570969AD1}.png)
-  ④启动远程，扫码即可连接
-
-2. 皎月连：
-  ①手机端和电脑端都下载皎月连
-  ②选择“服务端”，填写局域网ip 127.0.0.1 以及本地端口（在插件中提示的端口）
-  ③手机选择连接电脑
-  ④启动远程，扫码即可连接
-
-**皎月连 / ZeroTier（组网模式，给虚拟 IP）**
-
-1. 两端都连上同一个虚拟网络。
-2. 插件「网络入口」选「局域网 / 虚拟组网」，在地址列表里找到 natpierce（皎月连）或 ZeroTier 那张网卡，启用它。
-3. 启动远程，扫码即可连接
-
-两种方式延迟最低。连不上先确认两端都显示「已连接」，再看 Windows 防火墙有没有放行那个网关端口。
-
-也可以先用「仅本机」在电脑浏览器验证登录，再配置 HTTPS 隧道供手机使用。安全修复后的凭据、下载和手机通道要求见 [安全说明](SECURITY.md)。
+第一次接入可先选「仅本机」，在电脑浏览器完成一次配对，再配置 HTTPS 隧道供手机使用。使用 SakuraFrp 的自动 HTTPS 时，把隧道目标设为插件面板显示的 `127.0.0.1` 和网关端口；Windows 的系统服务日志会从 `%ProgramData%\SakuraFrpService\Logs` 检测。通过虚拟组网接入时，也需要为手机提供受信任的 HTTPS 入口，例如 Tailscale Serve。详见 [安全说明](SECURITY.md)。
 
 ## 常见问题
 
@@ -204,13 +152,10 @@ profile 在 `~/.dsh/profiles/<名字>`（Windows 是 `%USERPROFILE%\.dsh\profile
 先确认入口为 HTTPS 且证书受信任；公网入口要等隧道状态变成「已连接」。遇到证书错误时检查域名、证书链与隧道配置。
 
 **连不上，但不知道断在哪一段？**
-面板「网络入口」下面有个 **一键自检**：按手机请求经过的顺序逐段过（总开关 → 网关 → DSH 本体 → 隧道 → 外网地址 → 设备准入），绿的通过、黄的注意、红的就是断点，红下面那行灰字写着怎么改。命令行也能跑（只读，不绑端口、不改状态）：
+面板「网络入口」下的 **一键自检** 会逐段检查总开关、网关、DSH 本体、隧道、外网地址和设备准入。红色那行指出断点，并给出处理建议。
 
-**选了「局域网 / 虚拟组网」，手机还是打不开？**
-按顺序排一下：①电脑面板上「本机地址」列出好几个时，逐个试；②同一个 Wi-Fi 却不通，多半是路由器开了 AP 隔离（访客网络常见），换主网络；③Windows 防火墙第一次会弹窗，选「允许访问」——没弹就手动加一条入站规则，放行面板上显示的网关端口（当前实例是 64900，不是固定的 64701）；④用皎月连 / ZeroTier，先确认手机和电脑都显示「已连接」并且在同一虚拟网段；⑤群里那台机器如果开着 VPN，局域网的包可能被路由走掉，先关掉再试。
-
-**地址太多，不知道二维码用的是哪一条？**
-面板「网络入口 → 本机地址」每条后面有「用这个」：点它就等于告诉插件“二维码和登录地址都钉在这张网卡上”，点完二维码立刻换地址、不用重连。装皎月连时那张网卡叫 `natpierce`（地址形如 `10.6.22.1`），装在手机上用客户端连上电脑后，手机浏览器打开这个地址就能进。选过之后网卡掉线（拔网线、虚拟组网断了），插件会临时回退到最优地址并在面板上说明，网卡回来后自动回到你选的那条。
+**手机打开局域网地址时提示 HTTPS required？**
+网关拒绝非回环的明文 HTTP。请改用具有受信任证书的 HTTPS 入口，无需为这个错误开放 Windows 防火墙端口。
 
 **扫码后停在「等待同意」？**
 这是设计。去电脑面板「设备准入」，核对那串 6 位数字，一致再点「允许」。
@@ -219,7 +164,7 @@ profile 在 `~/.dsh/profiles/<名字>`（Windows 是 `%USERPROFILE%\.dsh\profile
 在电脑本机面板点击「重置密码」。旧会话、设备信任与手机通道令牌立即撤销，所有设备需重新认证与配对。
 
 **面板里找不到「远程」？**
-插件没装好或 DSH 没重启。检查 profile 的 `package.json` 里有没有依赖和 bundle 条目，然后重启。
+先在「更多」里找「远程」，并在「插件」页确认已安装、已启用。是否需要重启以插件管理器提示为准。
 
 **Cloudflare 下载失败？**
 插件只接受固定版本且匹配内置官方 SHA-256 的 cloudflared。下载失败时可选择：
@@ -285,19 +230,10 @@ assets/                    README 截图
 
 **No app required.** Any browser can scan the QR code, type the password, and continue the same desktop session. The 4 MB Android app is optional: camera scanning, remembered passwords, download-to-phone. **The native app is Android-only for now** — on iOS / iPadOS and HarmonyOS, just use the built-in browser (same gateway, same admission control, add to home screen as a PWA).
 
-- Four network entries: external tunnel (SakuraFrp) and Cloudflare quick tunnel are recommended; LAN-only for local use; Tailscale works but usually relays traffic and adds latency.
+- Phone access requires trusted HTTPS via an external tunnel, Cloudflare quick tunnel, or Tailscale Serve. Loopback HTTP is for use on the computer itself.
 - Pairing: password → 6-digit code shown on both ends → device allow-list. Scanning a QR never grants access by itself.
 - Admission control: online limit, pending queue, remove / block devices, kick-all.
 
-Install (plugin):
-
-```bash
-dsh plugin --profile desktop add dsh-mobile-harness
-# or from source:
-git clone https://github.com/afeack/dsh-mobile-harness.git
-cd dsh-mobile-harness
-node scripts/install-plugin.mjs --profile desktop
-cd ~/.dsh/profiles/desktop && pnpm install
-```
+Install this fork from source: open **DSH Desktop → Plugins → Add plugin** and paste the absolute path to `plugins/dsh-mobile-harness` within your checkout. Alternatively, run `npm pack` in that directory and add the resulting tarball by absolute path.
 
 Downloads are split by component: plugin tarball in [plugin-v1.2.0](https://github.com/afeack/dsh-mobile-harness/releases/tag/plugin-v1.2.0), APK in [v1.0.0](https://github.com/afeack/dsh-mobile-harness/releases/tag/v1.0.0). License: MIT. See [SECURITY.md](SECURITY.md) before exposing the gateway to the public internet.

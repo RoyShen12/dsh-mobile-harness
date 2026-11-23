@@ -6,7 +6,27 @@
  * never touches the network directly. Refusals (locked phone, stale snapshot, payment app) come
  * back as `ok:false` with the phone's own Chinese explanation, and the tool passes them through.
  */
-import { defineTool } from '@deepseek-ai/dsh-tools'
+import { createRequire } from 'node:module'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+async function loadTools() {
+  // A link: checkout sits outside the Desktop package tree. Borrow the Host's
+  // own SDK on either side of the ASAR boundary instead of requiring a second copy.
+  const anchors = [
+    process.env.DSH_INSTALL_DIR && join(process.env.DSH_INSTALL_DIR, 'package.json'),
+    process.argv[1],
+    import.meta.url
+  ].filter(Boolean)
+  for (const anchor of anchors) {
+    let resolved
+    try { resolved = createRequire(anchor).resolve('@deepseek-ai/dsh-tools') } catch { continue }
+    return import(pathToFileURL(resolved).href)
+  }
+  throw new Error('dsh-mobile-harness: unable to resolve the DSH tools SDK')
+}
+
+const { defineTool } = await loadTools()
 
 export const PHONE_ACTIONS = ['status', 'screen', 'tap', 'long_press', 'type', 'key', 'scroll', 'open_app']
 

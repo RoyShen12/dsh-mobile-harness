@@ -21,6 +21,7 @@ import { listPool, saveUpload, openFile, removeFile, ensurePool, MAX_UPLOAD_BYTE
 import { pickFolder, hasNativePicker } from './picker.js'
 import { createServer } from 'node:net'
 import { requestUpstream, resolveUpstreamOrigin } from './upstream.js'
+import { sakuraFrpLogDir } from './windows-paths.js'
 
 /** @typedef {'disabled'|'starting'|'enabled'|'stopping'|'error'} RemotePhase */
 
@@ -434,8 +435,8 @@ export class RemoteService {
    */
   detectSakuraFrp(dirOverride = null) {
     try {
-      const dir = dirOverride || 'C:\\ProgramData\\SakuraFrpService\\Logs'
-      if (!existsSync(dir)) return null
+      const dir = dirOverride || sakuraFrpLogDir()
+      if (!dir || !existsSync(dir)) return null
       // frpc rolls its log at midnight, but a service that kept running writes yesterday's file
       // until it restarts, so read the newest file instead of guessing today's name.
       const newest = readdirSync(dir)
@@ -834,7 +835,7 @@ export class RemoteService {
   }
 
   canBind(port) {
-    if (!Number.isInteger(port) || port <= 0) return Promise.resolve(false)
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) return Promise.resolve(false)
     return new Promise((resolve) => {
       const server = createServer()
       server.once('error', () => resolve(false))
@@ -929,7 +930,7 @@ export class RemoteService {
       } else {
         add('public', '外网地址', 'fail', url + ' 连不上（' + hit.error + '）', '下面是本地侧的线索；先确认 SakuraFrp 客户端里这条隧道是「已启动」')
         if (!relay) {
-          add('relay', 'SakuraFrp 隧道', 'warn', '没读到 frpc 的运行日志（' + 'C:\\ProgramData\\SakuraFrpService\\Logs' + '）', '去 SakuraFrp 面板确认这条隧道的「本地端口」等于网关端口 ' + port)
+          add('relay', 'SakuraFrp 隧道', 'warn', '没读到 SakuraFrp 服务的运行日志', '在隧道客户端确认这条隧道的「本地端口」等于网关端口 ' + port)
         } else if (relay.localPort) {
           const bindable = await this.canBind(relay.localPort)
           const when = relay.localPortAt ? '（frpc 记录于 ' + relay.localPortAt + '）' : ''
@@ -950,6 +951,7 @@ export class RemoteService {
         else add('public', '外网地址', 'fail', this.publicUrl + ' 连不上（' + hit.error + '）', 'quick 隧道地址每次重启都会变，重新扫码')
       }
     } else if (this.state.tunnel === 'lan') {
+      add('lan-transport', '局域网登录', 'fail', '网关拒绝非回环的明文 HTTP 登录', '手机接入请选择受信任的 HTTPS 隧道；仅在电脑上使用请选择「仅本机」')
       const addresses = this.lanAddresses()
       const chosen = this.preferredLanAddress()
       if (addresses.length) {
@@ -1421,9 +1423,7 @@ export class RemoteService {
     // 502 and the phone shows a bare "connection refused".
     let preferredPort = this.state.proxyPort
     let relayLocalPort = null
-    // frpc's target port wins whenever it is readable, whatever entry is selected: the relay is a
-    // fixed port, so a gateway that drifted elsewhere answers every request through it with 502.
-    const relay = this.detectSakuraFrp()
+    const relay = this.state.tunnel === 'external' ? this.detectSakuraFrp() : null
     if (relay?.localPort) {
       relayLocalPort = relay.localPort
       // Ports the OS refuses to bind (EACCES: a VPN/safety client or a reserved range holds them)
@@ -1431,7 +1431,7 @@ export class RemoteService {
       if (await this.canBind(relay.localPort)) {
         preferredPort = relay.localPort
       } else {
-        this.warn(`relay local port ${relay.localPort} cannot be bound on this machine (EACCES); keeping ${preferredPort}. Change the tunnel local port in SakuraFrp to match the gateway port.`)
+        this.warn(`relay local port ${relay.localPort} cannot be bound; trying the remembered port or a free alternative. Change the tunnel local port in SakuraFrp to match the gateway port.`)
       }
     }
     this.relayLocalPort = relayLocalPort

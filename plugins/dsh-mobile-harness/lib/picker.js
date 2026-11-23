@@ -8,6 +8,7 @@
  */
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
+import { windowsPowerShellPath } from './windows-paths.js'
 
 /** @returns {boolean} whether a native picker can be opened on this host */
 export function hasNativePicker() {
@@ -33,30 +34,31 @@ async function pickWithElectron() {
 }
 
 /** Windows fallback: a STA PowerShell process that shows a real folder browser. */
-function pickWithPowerShell(timeoutMs = 300000) {
+function pickWithPowerShell(exe, timeoutMs = 300000) {
   const script = [
+    "$ErrorActionPreference = 'Stop'",
+    '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
     'Add-Type -AssemblyName System.Windows.Forms',
     '$d = New-Object System.Windows.Forms.FolderBrowserDialog',
     "$d.Description = '选择文件池目录'",
     '$d.ShowNewFolderButton = $true',
-    "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) } else { [Console]::Out.Write('') }"
+    'try { if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) } } finally { $d.Dispose() }'
   ].join('; ')
+  const encoded = Buffer.from(script, 'utf16le').toString('base64')
   return new Promise((resolve, reject) => {
-    const child = spawn('powershell.exe', ['-STA', '-NoProfile', '-Command', script], { windowsHide: true })
+    const child = spawn(exe, ['-STA', '-NoProfile', '-EncodedCommand', encoded], { windowsHide: true })
     let out = ''
     let err = ''
     const timer = setTimeout(() => {
       try { child.kill() } catch { /* already gone */ }
       reject(new Error('选择超时'))
     }, timeoutMs)
-    child.stdout.on('data', (chunk) => { out += chunk })
-    child.stderr.on('data', (chunk) => { err += chunk })
+    child.stdout.setEncoding('utf8').on('data', (chunk) => { out += chunk })
+    child.stderr.setEncoding('utf8').on('data', (chunk) => { err += chunk })
     child.on('error', (error) => { clearTimeout(timer); reject(error) })
     child.on('close', (code) => {
       clearTimeout(timer)
-      const picked = out.trim()
-      if (picked.length > 0) resolve(picked)
-      else if (code === 0) resolve('')
+      if (code === 0) resolve(out || null)
       else reject(new Error(err.trim() || 'powershell exit ' + code))
     })
   })
@@ -67,5 +69,7 @@ export async function pickFolder() {
   const fromElectron = await pickWithElectron()
   if (fromElectron !== undefined) return fromElectron
   if (process.platform !== 'win32') return null
-  return pickWithPowerShell()
+  const exe = windowsPowerShellPath()
+  if (!exe) throw new Error('未找到系统 Windows PowerShell，请直接填写目录')
+  return pickWithPowerShell(exe)
 }

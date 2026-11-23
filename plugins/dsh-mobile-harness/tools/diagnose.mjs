@@ -4,7 +4,7 @@
  *
  * 用途：手机连不上时，不用开面板也能知道是哪一段断了。
  * 面板里的「一键自检」按钮走的是插件内部的同一套判断；这个脚本是它的离线孪生兄弟，
- * 只读不写，不绑端口、不改状态，可以在 DSH 没启动时也跑。
+ * 不写状态文件；检查隧道端口时会试绑回环后立即关闭。DSH 没启动也可以运行。
  *
  * 判定原则：先看结果，再看原因。外网地址能返回 HTTP，链路就是通的，
  * 此时日志里任何“连接映射目标失败”的旧行都不作数（frpc 只在失败时打印那一行，
@@ -17,16 +17,16 @@
  * 退出码：0 全通 / 1 有断点 / 2 读不到状态文件
  */
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
-import { request as httpRequest } from 'node:http'
-import { request as httpsRequest } from 'node:https'
 import { createServer } from 'node:net'
-import { homedir } from 'node:os'
 import { collectLanAddresses, pickLanAddress } from '../lib/lan.js'
+import { resolveStateFile } from '../lib/state.js'
+import { requestUpstream } from '../lib/upstream.js'
+import { sakuraFrpLogDir } from '../lib/windows-paths.js'
 import { join } from 'node:path'
 
-const STATE_FILE = join(homedir(), '.dsh', 'remote-access', 'plugin-state.json')
+const STATE_FILE = resolveStateFile()
 // Overridable so the regression test can point it at a fixture directory.
-const FRP_LOG_DIR = process.env.DSH_DIAGNOSE_FRP_DIR || 'C:\\ProgramData\\SakuraFrpService\\Logs'
+const FRP_LOG_DIR = process.env.DSH_DIAGNOSE_FRP_DIR || sakuraFrpLogDir()
 const asJson = process.argv.includes('--json')
 // Prints only what the log parser sees (no probing, no state file); used by the regression test.
 const frpOnly = process.argv.includes('--frp-only')
@@ -36,29 +36,19 @@ const add = (id, label, status, detail, hint = null) => steps.push({ id, label, 
 
 function probe(rawUrl, timeoutMs = 5000) {
   return new Promise((resolve) => {
-    let target
+    let req
     try {
-      target = new URL(rawUrl)
+      req = requestUpstream(rawUrl, {
+        timeout: timeoutMs,
+        headers: { 'user-agent': 'dsh-mobile-harness-diagnose', 'accept-encoding': 'identity' }
+      }, (res) => {
+        res.resume()
+        resolve({ code: res.statusCode ?? 0 })
+      })
     } catch {
       resolve({ code: 0, error: 'bad-url' })
       return
     }
-    const send = target.protocol === 'https:' ? httpsRequest : httpRequest
-    const req = send(
-      {
-        host: target.hostname,
-        port: target.port || (target.protocol === 'https:' ? 443 : 80),
-        path: target.pathname + target.search,
-        method: 'GET',
-        timeout: timeoutMs,
-        rejectUnauthorized: false,
-        headers: { 'user-agent': 'dsh-mobile-harness-diagnose', 'accept-encoding': 'identity' }
-      },
-      (res) => {
-        res.resume()
-        resolve({ code: res.statusCode ?? 0 })
-      }
-    )
     req.on('timeout', () => {
       req.destroy()
       resolve({ code: 0, error: 'timeout' })
@@ -85,7 +75,7 @@ function canBind(port) {
  * 返回 { localPort, localPortAt, endpoint, connected, log } 或 null。
  */
 function readFrpRelay() {
-  if (!existsSync(FRP_LOG_DIR)) return null
+  if (!FRP_LOG_DIR || !existsSync(FRP_LOG_DIR)) return null
   const files = readdirSync(FRP_LOG_DIR)
     .filter((name) => /^SakuraFrpService\.\d{8}\.log$/.test(name))
     .sort()
@@ -163,7 +153,7 @@ async function main() {
         } else {
           add('public', '外网地址', 'fail', url + ' 连不上（' + hit.error + '）', '先确认 SakuraFrp 客户端里这条隧道是「已启动」；下面是本地侧线索')
           if (!relay) {
-            add('relay', 'SakuraFrp 隧道', 'warn', '没读到 frpc 的运行日志（' + FRP_LOG_DIR + '）', '去 SakuraFrp 面板确认「本地端口」等于网关端口 ' + port)
+            add('relay', 'SakuraFrp 隧道', 'warn', '没读到 SakuraFrp 服务的运行日志', '去 SakuraFrp 面板确认「本地端口」等于网关端口 ' + port)
           } else if (relay.localPort) {
             const bindable = await canBind(relay.localPort)
             const when = relay.localPortAt ? '（frpc 记录于 ' + relay.localPortAt + '）' : ''
@@ -196,9 +186,7 @@ async function main() {
       } else {
         add('lan', '局域网入口', 'warn', list.map((entry) => entry.address + '（' + entry.name + '）' + (entry.address === chosen ? ' ← 二维码用这个' : '')).join('，'), '地址不对就到面板「网络入口 → 本机地址」点「用这个」换一条；手机必须和电脑在同一网段')
       }
-      const hit = chosen ? await probe('http://' + chosen + ':' + port + '/', 2500) : { code: 0, error: 'no-address' }
-      if (hit.code) add('lan-gw', '虚拟组网直连', 'ok', 'http://' + chosen + ':' + port + '/ 有响应（HTTP ' + hit.code + '）', null)
-      else add('lan-gw', '虚拟组网直连', 'warn', 'http://' + chosen + ':' + port + '/ 没有响应（' + hit.error + '）', '网关在 LAN 入口下要监听 0.0.0.0——确认入口已切到「局域网 / 虚拟组网」并把开关重新打开')
+      add('lan-gw', '局域网登录', 'fail', '网关拒绝非回环的明文 HTTP 登录', '手机接入请选择受信任的 HTTPS 隧道；仅在电脑上使用请选择「仅本机」')
     } else if (tunnel === 'tailscale') {
       add('tailscale', 'Tailscale', 'warn', '命令行版读不到 Tailscale 主机名，去面板看', '本机运行 tailscale up 并登录')
     } else {

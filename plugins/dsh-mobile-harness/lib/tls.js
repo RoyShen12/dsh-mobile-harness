@@ -8,6 +8,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync,
 import { delimiter, isAbsolute, join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
+import { windowsPowerShellPath } from './windows-paths.js'
 
 const OPENSSL_CANDIDATES = [
   '/usr/bin/openssl',
@@ -61,13 +62,6 @@ function findOpenssl() {
     }
   }
   return null
-}
-
-function powershellPath() {
-  if (process.platform !== 'win32') return null
-  const root = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows'
-  const candidate = join(isAbsolute(root) ? root : 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-  return existsSync(candidate) ? candidate : null
 }
 
 function removeFile(file) {
@@ -163,7 +157,7 @@ export function ensureTlsMaterials(stateDir) {
     if (!existsSync(pfxPath) || !passphrase) {
       removeFile(pfxPath)
       removeFile(passphrasePath)
-      const powershell = powershellPath()
+      const powershell = windowsPowerShellPath()
       if (!powershell) {
         lastTlsError = '未找到系统 PowerShell 或 OpenSSL'
         return null

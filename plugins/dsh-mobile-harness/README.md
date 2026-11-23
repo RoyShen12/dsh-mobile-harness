@@ -39,17 +39,9 @@ Host 上游使用 `webServer.getOrigin()` 的真实 HTTP(S) 地址，兼容 IPv6
 
 ## 安装
 
-```bash
-dsh plugin --profile desktop add dsh-mobile-harness
-```
+在 Windows 或 macOS 的 **DSH Desktop → 插件 → 添加插件** 粘贴本目录的绝对路径。在 Windows PowerShell 的仓库根目录可用 `(Resolve-Path -LiteralPath .\plugins\dsh-mobile-harness).Path` 取路径。源码可直接安装，无需预先构建；也可在本目录执行 `npm pack`，再添加生成的 `.tgz` 绝对路径。
 
-或者从仓库装：
-
-```bash
-node scripts/install-plugin.mjs --profile desktop   # 写依赖 + bundle 条目，幂等
-```
-
-通过当前 DSH 的 Plugin Manager 安装时，启用 HMR 的 profile 可立即加载，按安装结果的 `application` / `nextStep` 操作；「远程」默认显示在会话侧栏。支持侧栏固定的 DSH 版本中，取消固定后可在「更多」打开或重新固定。使用旧版宿主或仅在外部脚本中同步文件时，需触发插件重载或按提示重启。
+按插件管理器的安装结果操作。启用后「远程」默认显示在会话侧栏；取消固定后，可在「更多」打开或重新固定。
 
 ## 使用
 
@@ -61,18 +53,17 @@ node scripts/install-plugin.mjs --profile desktop   # 写依赖 + bundle 条目�
 
 | 入口 | 推荐度 | 说明 |
 | --- | --- | --- |
-| **局域网 / 虚拟组网** | ✅ **推荐（同网段）** | 手机和电脑同一个 Wi-Fi；或两端都连着皎月连 / ZeroTier / Radmin 这类虚拟组网。网关监听所有网卡，面板列出本机每个 IPv4，**点「用这个」可以把二维码钉在指定的那张网卡上**（例如皎月连的 `10.6.22.1`）；不出公网，延迟最低 |
+| **局域网 / 虚拟组网** | 旧版入口 | 网卡列表仍可查看。网关拒绝非回环的明文 HTTP 登录；手机请改用受信任的 HTTPS 入口 |
 | **SakuraFrp / 任意外部隧道** | ✅ 推荐（跨网） | 填外网地址（如 `https://frp-cat.com:12345/`）；「自动检测」会读 SakuraFrp 运行日志，并核对隧道本地端口和网关端口。地址稳定 |
 | **Cloudflare 快速隧道** | ✅ 推荐（零准备） | 免账号：插件自己下 `cloudflared`（约 50 MB，带进度条）并建 quick tunnel；地址每次重启都变 |
 | **仅本机** | 本机访问 | 仅回环监听，手机需通过 HTTPS 隧道接入 |
 | **Tailscale** | ⚠️ 不推荐 | 能穿 NAT，但常走 DERP 中继，延迟明显偏高；只在内网直连时考虑 |
-| **仅本机** | 🛠 本机访问用 | 只监听 `127.0.0.1`，手机连不上；本机排查时用 |
 
 ## 手机连不上？先自检
 
 面板「网络入口」下面有个 **一键自检** 按钮：它按手机请求经过的顺序逐段检查（总开关 → 网关 → DSH 本体 → 隧道 → 外网地址 → 设备准入），每一项给出绿 / 黄 / 红，红色那行就是断点，下面灰字直接写改法。
 
-命令行也能跑（只读，不绑端口、不改状态，DSH 没启动也能用）：
+命令行也能跑，不会修改状态文件。检查隧道端口时会尝试绑定回环地址，并立即释放：
 
 ```bash
 node tools/diagnose.mjs          # 彩色报告

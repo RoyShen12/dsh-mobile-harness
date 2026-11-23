@@ -23,6 +23,35 @@ const close = server => new Promise(resolve => {
   server.close(resolve)
   server.closeAllConnections?.()
 })
+
+async function listenUpstream(server, host, scenario) {
+  let port
+  try {
+    port = await listen(server, host)
+  } catch (error) {
+    if (host !== '::1' || !['EAFNOSUPPORT', 'EADDRNOTAVAIL'].includes(error.code)) throw error
+    console.log(`SKIP ${scenario} IPv6: cannot bind loopback (${error.code})`)
+    return null
+  }
+  if (host !== '::1' || process.platform !== 'win32') return port
+
+  // A Windows host can allow the IPv6 bind while denying even a plain TCP connection.
+  // Probe this exact OS-assigned port without involving our HTTP, TLS or gateway code.
+  const socket = net.connect(port, host)
+  socket.setTimeout(3000, () => socket.destroy(new Error('IPv6 loopback TCP probe timed out')))
+  try {
+    await once(socket, 'connect')
+    return port
+  } catch (error) {
+    await close(server)
+    if (error.code !== 'EACCES' || error.syscall !== 'connect') throw error
+    console.log(`SKIP ${scenario} IPv6: Windows denied plain TCP loopback (${error.code})`)
+    return null
+  } finally {
+    socket.destroy()
+  }
+}
+
 const readResponse = url => new Promise((resolve, reject) => {
   const req = requestUpstream(url, { agent: false }, res => {
     const chunks = []
@@ -56,14 +85,8 @@ async function relayCase(protocol, host, credentials) {
     socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n')
     socket.on('data', chunk => socket.write(chunk))
   })
-  let port
-  try { port = await listen(upstream, host) } catch (error) {
-    if (host === '::1' && ['EAFNOSUPPORT', 'EADDRNOTAVAIL'].includes(error.code)) {
-      console.log('SKIP IPv6: loopback unavailable')
-      return
-    }
-    throw error
-  }
+  const port = await listenUpstream(upstream, host, protocol)
+  if (port === null) return
   const origin = `${protocol}//${net.isIP(host) === 6 ? `[${host}]` : host}:${port}`
   const proxy = new GatewayProxy({ getUpstreamOrigin: () => origin })
   proxy.dshCookie = 'dsh-owner=test'
@@ -117,7 +140,8 @@ async function relayCase(protocol, host, credentials) {
 
 async function rejectWrongIdentity(credentials, host) {
   const server = https.createServer(credentials)
-  const port = await listen(server, host)
+  const port = await listenUpstream(server, host, 'wrong certificate identity')
+  if (port === null) return
   const origin = `https://${net.isIP(host) === 6 ? `[${host}]` : host}:${port}`
   try {
     await assert.rejects(readResponse(origin), { code: 'ERR_TLS_CERT_ALTNAME_INVALID' })
@@ -149,7 +173,7 @@ if (fixtureDir) {
 } else {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-upstream-test-'))
   const checkedDir = realpathSync(dir)
-  assert.ok(checkedDir.startsWith(realpathSync(tmpdir()) + '/dsh-upstream-test-'))
+  assert.ok(checkedDir.startsWith(join(realpathSync(tmpdir()), 'dsh-upstream-test-')))
   try {
     const cert = join(dir, 'cert.pem')
     const result = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1', '-keyout', join(dir, 'key.pem'), '-out', cert], { encoding: 'utf8' })

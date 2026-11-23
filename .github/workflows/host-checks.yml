@@ -1,0 +1,39 @@
+name: Host checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: plugins/dsh-mobile-harness
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Locate OpenSSL from Git for Windows if needed
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command openssl.exe -ErrorAction SilentlyContinue)) {
+            $bin = Join-Path $env:ProgramFiles 'Git\usr\bin'
+            if (-not (Test-Path (Join-Path $bin 'openssl.exe'))) { throw 'OpenSSL is required for the local TLS checks.' }
+            Add-Content -Path $env:GITHUB_PATH -Value $bin -Encoding utf8
+          }
+      - name: Run Host and web regression tests
+        run: node --test "tools/test-*.mjs"
+      - name: Check what the local bundle packs
+        run: npm pack --dry-run

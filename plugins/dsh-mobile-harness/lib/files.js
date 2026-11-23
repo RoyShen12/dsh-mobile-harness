@@ -19,6 +19,8 @@ export const POOL_DIR = 'files'
 /** One upload may not exceed this; large videos are better copied over a cable. */
 export const MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
+const WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|conin\$|conout\$|(?:com|lpt)[1-9¹²³]) *(?:\.|$)/i
+
 export function encodeId(rel) {
   return Buffer.from(String(rel), 'utf8').toString('base64url')
 }
@@ -42,7 +44,7 @@ export function sanitizeName(raw) {
   const ext = extname(name).slice(0, 20)
   const stem = name.slice(0, Math.max(1, name.length - ext.length)).slice(0, 100)
   name = stem + ext
-  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(name)) name = '_' + name
+  if (WINDOWS_DEVICE_NAME.test(name)) name = '_' + name
   return name
 }
 
@@ -75,7 +77,7 @@ export function contentDisposition(name) {
 /** IDs name direct children only; never interpret an ID as a path. */
 export function resolveInPool(dir, name) {
   if (!name || typeof name !== 'string' || name === '.' || name === '..' || /[\/\\\x00]/.test(name) || name.endsWith('.part')) return null
-  if (process.platform === 'win32' && (/:|[. ]$/.test(name) || /^(con|prn|aux|nul|conin\$|conout\$|(?:com|lpt)[1-9¹²³])(?:\.|$)/i.test(name))) return null
+  if (process.platform === 'win32' && (/:|[. ]$/.test(name) || WINDOWS_DEVICE_NAME.test(name))) return null
   return join(dir, name)
 }
 

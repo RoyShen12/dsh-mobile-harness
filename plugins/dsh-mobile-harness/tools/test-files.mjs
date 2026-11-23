@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, symlink, realpath, rm, readFile, rename } fr
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { text } from 'node:stream/consumers'
-import { encodeId, listPool, openFile, removeFile, resolveInPool } from '../lib/files.js'
+import { encodeId, listPool, openFile, removeFile, resolveInPool, saveUpload } from '../lib/files.js'
 
 test('transfer IDs select regular files directly in the pool', async t => {
   const prefix = join(await realpath(tmpdir()), 'dsh-pool-test-')
@@ -29,7 +29,15 @@ test('transfer IDs select regular files directly in the pool', async t => {
     assert.equal(await removeFile(pool, encodeId(path)), false)
   }
   assert.equal(await removeFile(pool, listed.id), true)
-  if (process.platform !== 'win32') {
+  if (process.platform === 'win32') {
+    for (const name of ['CONIN$.txt', 'COM¹.txt', 'NUL .txt']) {
+      assert.equal(resolveInPool(pool, name), null)
+      const uploaded = await saveUpload(pool, name, Buffer.from('fixture'))
+      assert.equal(uploaded.name, '_' + name)
+      assert.equal(await text((await openFile(pool, uploaded.id)).stream()), 'fixture')
+      assert.equal(await removeFile(pool, uploaded.id), true)
+    }
+  } else {
     await symlink(fixture, join(pool, 'linked'))
     assert.equal(await openFile(pool, encodeId('linked')), null)
     assert.equal(await removeFile(pool, encodeId('linked')), false)
