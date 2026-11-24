@@ -19,6 +19,7 @@ export const inject = ['webServer', 'connection', 'tools']
 
 export const STATUS_PATH = '/api/dsh-mobile-harness.status'
 export const PENDING_PATH = '/api/dsh-mobile-harness.pending'
+export const APPROVAL_PATH = '/api/dsh-mobile-harness.approval'
 export const TOGGLE_PATH = '/api/dsh-mobile-harness.toggle'
 export const PASSWORD_PATH = '/api/dsh-mobile-harness.password'
 export const EXTERNAL_PATH = '/api/dsh-mobile-harness.external'
@@ -123,7 +124,7 @@ export function apply(ctx) {
       // remote phone must read: it carries view=client so the panel hides host-only controls, and
       // it is redacted below. Everything else here is state-changing and stays host-only; the
       // gateway's HOST_ONLY_API list refuses the same POSTs a second time.
-      if (request.headers.get('x-dsh-mobile-remote') && route.path !== STATUS_PATH && route.path !== PENDING_PATH) {
+      if (request.headers.get('x-dsh-mobile-remote') && route.path !== STATUS_PATH && route.path !== PENDING_PATH && route.path !== APPROVAL_PATH) {
         return json({ error: 'local-management-only' }, 403)
       }
       return route.fetch(request)
@@ -201,6 +202,41 @@ export function apply(ctx) {
         }
       }),
     'dsh-mobile-harness: pending route'
+  )
+
+  // Answer a pairing request (approve with the matching code, or deny). The owner's window may use
+  // it like the devices route; through the gateway only an already-trusted device may, and only
+  // for someone else's request.
+  ctx.effect(
+    () =>
+      register({
+        path: APPROVAL_PATH,
+        methods: ['POST'],
+        requestBody: 'buffered',
+        fetch: async (request) => {
+          if (!service) return json(idleSnapshot('远程服务尚未初始化'), 503)
+          let body = {}
+          try {
+            body = await request.json()
+          } catch {
+            body = {}
+          }
+          const remote = request.headers.get('x-dsh-mobile-remote') !== null
+            || request.headers.get('x-dsh-panel-view') === 'client'
+          try {
+            if (!remote) {
+              if (body?.action !== 'approve' && body?.action !== 'deny') return json({ error: 'bad-request' }, 400)
+              return json(service.handleDevices(body))
+            }
+            const approver = service.remoteApprover(request)
+            if (!approver) return json({ error: '这台设备还没有被信任，不能处理配对请求' }, 403)
+            return json(service.answerPending(body, approver))
+          } catch (error) {
+            return json({ error: error instanceof Error ? error.message : String(error) }, 400)
+          }
+        }
+      }),
+    'dsh-mobile-harness: approval route'
   )
 
   ctx.effect(

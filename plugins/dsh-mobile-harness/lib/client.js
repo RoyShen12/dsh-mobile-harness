@@ -101,6 +101,7 @@ globalThis.__ModuleLoader__.load({
     const EXTERNAL_PATH = '/api/dsh-mobile-harness.external'
     const RESET_PATH = '/api/dsh-mobile-harness.reset'
     const DEVICES_PATH = '/api/dsh-mobile-harness.devices'
+    const APPROVAL_PATH = '/api/dsh-mobile-harness.approval'
     const CLOUDFLARED_PATH = '/api/dsh-mobile-harness.cloudflared'
     const SELFCHECK_PATH = '/api/dsh-mobile-harness.selfcheck'
     const LAN_PATH = '/api/dsh-mobile-harness.lan'
@@ -2350,9 +2351,10 @@ html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-
     /**
      * Frame-wide approval prompt.
      *
-     * A device that needs approval must be answered from the desktop, and the user may be looking
-     * at any panel — so this lives in `shell.overlay` (the frame's own overlay seat) instead of in
-     * the remote panel. It long-polls the lightweight pending route (15 s hold, 5 s fallback), never
+     * A device that needs approval can be answered from the desktop or from any device the owner
+     * already trusts (the host only hands those the code), and the user may be looking at any
+     * panel — so this lives in `shell.overlay` (the frame's own overlay seat) instead of in the
+     * remote panel. A remote page that gets no code (not trusted) shows nothing. It long-polls the lightweight pending route (15 s hold, 5 s fallback), never
      * the full status snapshot the panel already polls, and only sends an approval after the
      * operator confirms the two screens agree.
      */
@@ -2372,7 +2374,10 @@ html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-
         if (body) setPendingState(body)
       }), [])
 
-      const pending = Array.isArray(pendingState?.pending) ? pendingState.pending : []
+      const isRemote = pendingState?.view === 'client'
+      const all = Array.isArray(pendingState?.pending) ? pendingState.pending : []
+      // Remote pages can only answer with the matching code; entries without one are not theirs.
+      const pending = isRemote ? all.filter((entry) => entry.pairCode) : all
       const queue = pending.filter((entry) => !(snooze[entry.requestId] > Date.now()))
       const active = queue[0] || null
       const now = useNow(Boolean(active), 1000)
@@ -2385,7 +2390,7 @@ html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-
         setError(null)
         setSending(true)
         try {
-          const next = await postJson(DEVICES_PATH, payload)
+          const next = await postJson(APPROVAL_PATH, payload)
           if (next?.error) setError(next.error)
         } catch (caught) {
           setError(caught instanceof Error ? caught.message : String(caught))
@@ -2428,8 +2433,8 @@ html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-
             { className: 'dru-dialog-hint' },
             active.pairCode
               ? confirming
-                ? '确认手机屏幕上显示的就是这串数字，再点下面的按钮。'
-                : '手机上也显示这串数字；两边一致才点「允许」。'
+                ? '确认新设备屏幕上显示的就是这串数字，再点下面的按钮。'
+                : '新设备上也显示这串数字；两边一致才点「允许」。'
               : '这台设备请求进入本机 DSH，确认是你就允许。'
           ),
           error ? h('div', { className: 'dru-dialog-error' }, error) : null,

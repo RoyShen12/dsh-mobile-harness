@@ -23,7 +23,7 @@ const ENTRY = {
 }
 
 /** A RemoteService stand-in: only the fields pendingState()/pendingResponse() actually touch. */
-function fakeService({ phase = 'enabled', busy = null, pendingList = [] } = {}) {
+function fakeService({ phase = 'enabled', busy = null, pendingList = [], records = {} } = {}) {
   const calls = { deviceCount: 0, pageCount: 0 }
   const service = {
     phase,
@@ -32,11 +32,13 @@ function fakeService({ phase = 'enabled', busy = null, pendingList = [] } = {}) 
       deviceCount: () => { calls.deviceCount += 1; return 2 },
       pageCount: () => { calls.pageCount += 1; return 1 }
     },
-    registry: { pendingList: () => pendingList },
+    registry: { pendingList: () => pendingList, get: (id) => records[id] ?? null },
     managementKey: Buffer.from('pending-test-key'),
     deviceReference: RemoteService.prototype.deviceReference,
     managementReferences: RemoteService.prototype.managementReferences,
-    pendingState: RemoteService.prototype.pendingState
+    pendingState: RemoteService.prototype.pendingState,
+    remoteApprover: RemoteService.prototype.remoteApprover,
+    isBlacklisted: () => false
   }
   return { service, calls }
 }
@@ -126,17 +128,25 @@ test('pendingResponse: 200 with ETag, then 304 for the same tag', async () => {
   assert.equal(second.headers.get('etag'), tag)
 })
 
-test('pendingResponse hides pairing codes from remote/client requests', async () => {
-  const { service } = fakeService({ pendingList: [ENTRY] })
-  const host = await pendingResponse(service, new Request(PENDING_URL))
-  assert.equal((await host.json()).pending[0].pairCode, '482913')
-
-  for (const headers of [{ 'x-dsh-panel-view': 'client' }, { 'x-dsh-mobile-remote': '1' }]) {
-    const response = await pendingResponse(service, new Request(PENDING_URL, { headers }))
-    const body = await response.json()
-    assert.equal(body.pending[0].pairCode, '')
-    assert.notEqual(body.pending[0].deviceId, ENTRY.deviceId)
+test('pendingResponse shows pairing codes to the host and trusted remote devices only', async () => {
+  const records = {
+    'trusted-phone': { deviceId: 'trusted-phone', state: 'trusted', label: 'iPad' },
+    'revoked-phone': { deviceId: 'revoked-phone', state: 'revoked' }
   }
+  const { service } = fakeService({ pendingList: [ENTRY], records })
+  const codeFor = async (headers) => (await (await pendingResponse(service, new Request(PENDING_URL, { headers }))).json()).pending[0]
+
+  assert.equal((await codeFor({})).pairCode, '482913')
+  const remote = { 'x-dsh-panel-view': 'client', 'x-dsh-mobile-remote': '1' }
+  const trusted = await codeFor({ ...remote, 'x-dsh-device-id': 'trusted-phone' })
+  assert.equal(trusted.pairCode, '482913')
+  assert.notEqual(trusted.deviceId, ENTRY.deviceId)
+  for (const headers of [remote, { ...remote, 'x-dsh-device-id': 'revoked-phone' }, { ...remote, 'x-dsh-device-id': 'unknown-phone' }]) {
+    assert.equal((await codeFor(headers)).pairCode, '')
+  }
+  // The waiting device never gets its own code back from the host.
+  records[ENTRY.deviceId] = { deviceId: ENTRY.deviceId, state: 'trusted' }
+  assert.equal((await codeFor({ ...remote, 'x-dsh-device-id': ENTRY.deviceId })).pairCode, '')
 })
 
 test('pendingResponse long poll answers as soon as the queue changes', async () => {

@@ -126,15 +126,21 @@ function sleep(ms, signal) {
 /**
  * The /pending body: one lightweight state read, rendered for this requester.
  *
- * A remote phone never sees the pairing codes (same redaction as the status route) and only ever
- * gets HMAC device references, because pendingState() maps deviceId through managementReferences.
+ * Pairing codes go to the owner's window and to every remote device the owner already trusts, so
+ * a new pairing can be confirmed from whichever screen is at hand. Anyone else (and the waiting
+ * device itself) gets the code blanked. Device ids are always HMAC references, because
+ * pendingState() maps deviceId through managementReferences.
  */
 function renderPending(service, request) {
   const state = service.pendingState()
   const clientView = request.headers.get('x-dsh-panel-view') === 'client'
     || request.headers.get('x-dsh-mobile-remote') !== null
+  state.view = clientView ? 'client' : 'host'
   if (clientView && Array.isArray(state.pending)) {
-    state.pending = state.pending.map((entry) => ({ ...entry, pairCode: '' }))
+    const approver = service.remoteApprover(request)
+    const own = approver ? service.deviceReference(approver.deviceId) : null
+    state.pending = state.pending.map((entry) =>
+      approver && entry.deviceId !== own ? entry : { ...entry, pairCode: '' })
   }
   const text = JSON.stringify(state)
   return { text, etag: etagFor(text) }
@@ -1113,6 +1119,46 @@ export class RemoteService {
    * ~5 KB (labels, audit trail, sessions, QR matrix) and the overlay polls it all day. No side
    * effects: nothing is refreshed, persisted or kicked off here.
    */
+  /**
+   * The trusted remote device behind a gateway request, or null. The gateway strips any
+   * client-sent x-dsh-device-id and stamps the verified one, so the header is authoritative here.
+   */
+  remoteApprover(request) {
+    const deviceId = request.headers.get('x-dsh-device-id')
+    if (typeof deviceId !== 'string' || deviceId.length < 6) return null
+    const record = this.registry.get(deviceId)
+    if (!record || record.state !== 'trusted') return null
+    if (this.isBlacklisted?.(deviceId)) return null
+    return record
+  }
+
+  /**
+   * Answer a pending pairing from a trusted remote device: approve (the code must match) or deny.
+   * Everything else in handleDevices stays on the owner's machine.
+   */
+  answerPending(body, approver) {
+    const action = body?.action
+    if (action !== 'approve' && action !== 'deny') throw new Error('不支持的操作')
+    const deviceId = this.resolveDeviceReference(body?.deviceId)
+    if (!deviceId) throw new Error('缺少待同意的请求')
+    if (deviceId === approver.deviceId) throw new Error('不能在等待中的设备上自己同意')
+    const pending = this.registry.pendingForDevice(deviceId)
+    if (!pending) throw new Error('这条请求已经处理过或已过期')
+    const by = 'device:' + (approver.label || approver.deviceId.slice(0, 6))
+    if (action === 'approve') {
+      const code = typeof body?.code === 'string' ? body.code.replace(/\s+/g, '') : ''
+      if (!pending.code || code !== pending.code) throw new Error('配对码不一致：请核对新设备屏幕上显示的数字')
+      const record = this.registry.approve(deviceId, by)
+      if (!record) throw new Error('设备不存在')
+      this.log('device approved from ' + by + ': ' + record.label + ' (' + record.client + ')')
+    } else {
+      this.registry.deny(pending.requestId, by)
+      this.disconnectDevice(deviceId)
+      this.log('device denied from ' + by + ': ' + pending.label)
+    }
+    return this.pendingState()
+  }
+
   pendingState() {
     const enabled = this.phase === 'enabled'
     // The gateway counters only mean something while it runs; skipping them also keeps this
