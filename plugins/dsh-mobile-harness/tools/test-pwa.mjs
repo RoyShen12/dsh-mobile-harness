@@ -135,3 +135,91 @@ test('missing gesture, unavailable API and rejected requests expose errors witho
   rejected.emitDoc('fullscreenerror')
   assert.match(rejected.api.getState().fullscreenError, /拒绝/)
 })
+
+test('iPhone Duo asymmetric safe-area, theme-color dedupe, and iOS PWA resume viewport resync', () => {
+  const attrs = new Map()
+  const styles = new Map()
+  const headMetas = [
+    { name: 'theme-color', attrs: new Map([['content', '#0e1014'], ['data-dsh-pwa-theme-color', '']]), removed: false },
+    { name: 'theme-color', attrs: new Map([['content', 'rgb(40, 44, 52)']]), removed: false }
+  ].map((m) => ({
+    hasAttribute: (k) => m.attrs.has(k),
+    getAttribute: (k) => m.attrs.get(k) ?? null,
+    setAttribute: (k, v) => m.attrs.set(k, String(v)),
+    remove() { m.removed = true },
+    _raw: m
+  }))
+  let safePadding = { paddingTop: '0px', paddingRight: '84px', paddingBottom: '34px', paddingLeft: '0px' }
+  let rootRect = { width: 382, height: 644 }
+  let scrollCalls = 0
+  let vpSetCalls = 0
+  const vpMeta = {
+    content: 'width=device-width, initial-scale=1, viewport-fit=cover',
+    getAttribute: () => vpMeta.content,
+    setAttribute: (_, v) => { vpSetCalls += 1; vpMeta.content = v }
+  }
+  const root = {
+    style: {
+      backgroundColor: '',
+      setProperty: (k, v) => styles.set(k, v),
+      removeProperty: (k) => styles.delete(k)
+    },
+    toggleAttribute: (k, v) => { v ? attrs.set(k, '') : attrs.delete(k) },
+    setAttribute: (k, v) => attrs.set(k, String(v)),
+    removeAttribute: (k) => attrs.delete(k),
+    hasAttribute: (k) => attrs.has(k)
+  }
+  const body = { children: [], appendChild(el) { el.isConnected = true; this.children.push(el) } }
+  const docListeners = new Map()
+  const winListeners = new Map()
+  const document = {
+    documentElement: root,
+    body,
+    head: { querySelectorAll: (sel) => sel === 'meta[name="theme-color"]' ? headMetas.filter((m) => !m._raw.removed) : [] },
+    readyState: 'complete',
+    visibilityState: 'visible',
+    activeElement: null,
+    createElement: () => ({ style: {}, setAttribute() {}, isConnected: false }),
+    getElementById: (id) => id === 'root' ? { getBoundingClientRect: () => rootRect } : null,
+    querySelector: (sel) => sel === 'meta[name="viewport"]' ? vpMeta : null,
+    addEventListener: (name, fn) => docListeners.set(name, fn)
+  }
+  const window = {
+    isSecureContext: true,
+    innerWidth: 466,
+    innerHeight: 678,
+    scrollX: 0,
+    scrollY: 18,
+    scrollTo: () => { scrollCalls += 1; window.scrollX = 0; window.scrollY = 0 },
+    getComputedStyle: (el) => el === root ? { getPropertyValue: () => '' } : safePadding,
+    matchMedia: (q) => ({ matches: q === '(display-mode: standalone)', addEventListener() {} }),
+    addEventListener: (name, fn) => winListeners.set(name, fn),
+    dispatchEvent() {}
+  }
+  const navigator = { userAgent: 'iPhone', platform: 'iPhone', maxTouchPoints: 5, standalone: true }
+  runInNewContext(source, { window, navigator, document, Event: class {} })
+
+  const state = window.__dshPwa.getState()
+  assert.deepEqual({ ...state.safeArea }, { top: 0, right: 84, bottom: 34, left: 0 })
+  assert.equal(state.sideBarEdge, 'right')
+  assert.equal(attrs.get('data-dsh-sa-side'), 'right')
+  // Theme-color deduplicated to single host color and synced to <html> background.
+  assert.equal(headMetas.filter((m) => !m._raw.removed).length, 1)
+  assert.equal(headMetas[0].getAttribute('content'), 'rgb(40, 44, 52)')
+  assert.equal(root.style.backgroundColor, 'rgb(40, 44, 52)')
+  // Shrunk #root triggers resync + scrollTo(0, 0).
+  assert.equal(attrs.get('data-dsh-pwa-resync'), '1')
+  assert.equal(styles.get('--dsh-pwa-vw'), '466px')
+  assert.equal(styles.get('--dsh-pwa-vh'), '678px')
+  assert.ok(scrollCalls >= 1)
+  // Forced nudge refreshes viewport meta when shrunk persists.
+  window.__dshPwa.resyncViewport(true)
+  assert.equal(vpSetCalls, 1)
+  // Once #root matches full viewport again, resync attribute clears cleanly.
+  rootRect = { width: 466, height: 678 }
+  safePadding = { paddingTop: '0px', paddingRight: '0px', paddingBottom: '34px', paddingLeft: '84px' }
+  window.__dshPwa.resyncViewport(false)
+  assert.equal(attrs.has('data-dsh-pwa-resync'), false)
+  assert.equal(window.__dshPwa.getState().sideBarEdge, 'left')
+  assert.equal(attrs.get('data-dsh-sa-side'), 'left')
+})

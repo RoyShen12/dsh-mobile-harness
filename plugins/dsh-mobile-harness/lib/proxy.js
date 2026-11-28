@@ -1442,14 +1442,15 @@ export class GatewayProxy {
 <style>
   html,body{margin:0;background:#0e1014;color:#e8eaee;font-family:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif}
   body{display:grid;place-items:center;box-sizing:border-box;min-height:100vh;min-height:100dvh;padding:max(12px,env(safe-area-inset-top,0px)) max(12px,env(safe-area-inset-right,0px)) max(12px,env(safe-area-inset-bottom,0px)) max(12px,env(safe-area-inset-left,0px))}
-  .card{box-sizing:border-box;width:min(100%,400px);min-width:0;background:#171a21;border:1px solid #2c323d;border-radius:14px;padding:26px 22px;box-shadow:0 18px 60px #0008;text-align:center}
+  .card{box-sizing:border-box;width:min(100%,400px);min-width:0;background:#171a21;border:1px solid #2c323d;border-radius:14px;padding:24px 20px;box-shadow:0 18px 60px #0008;text-align:center}
   h1{font-size:17px;margin:0 0 8px;font-weight:650}
   p{font-size:12px;color:#9aa3b2;margin:0 0 12px;line-height:1.6}
   .code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:32px;font-weight:600;letter-spacing:.22em;color:#e8b339;margin:16px 0 8px}
   .meta{font-size:11px;color:#5a6473;margin:0 0 14px}
   .msg{font-size:12px;color:#9aa3b2;min-height:18px;line-height:1.6}
   .msg.err{color:#ff8a70}
-  button{margin-top:14px;border:0;border-radius:9px;padding:10px 18px;font-size:13px;font-weight:650;background:#4c8dff;color:#08101f;cursor:pointer;display:none}
+  button{margin-top:14px;min-height:44px;border:0;border-radius:9px;padding:10px 18px;font-size:13px;font-weight:650;background:#4c8dff;color:#08101f;cursor:pointer;display:none}
+  @media(max-height:520px){.card{padding:14px 16px}.code{font-size:26px;margin:10px 0 6px}p,.meta{margin-bottom:8px}}
 </style></head><body>
 <div class="card">
   <h1>等待电脑确认</h1>
@@ -1693,14 +1694,15 @@ export class GatewayProxy {
 <style>
   html,body{margin:0;background:#0e1014;color:#e8eaee;font-family:"Microsoft YaHei UI","Segoe UI",system-ui,sans-serif}
   body{display:grid;place-items:center;box-sizing:border-box;min-height:100vh;min-height:100dvh;padding:max(12px,env(safe-area-inset-top,0px)) max(12px,env(safe-area-inset-right,0px)) max(12px,env(safe-area-inset-bottom,0px)) max(12px,env(safe-area-inset-left,0px))}
-  form{box-sizing:border-box;width:min(100%,360px);min-width:0;background:#171a21;border:1px solid #2c323d;border-radius:14px;padding:26px 22px;box-shadow:0 18px 60px #0008}
+  form{box-sizing:border-box;width:min(100%,360px);min-width:0;background:#171a21;border:1px solid #2c323d;border-radius:14px;padding:24px 20px;box-shadow:0 18px 60px #0008}
   h1{font-size:17px;margin:0 0 6px;font-weight:650}
-  p{font-size:12px;color:#9aa3b2;margin:0 0 18px;line-height:1.6}
-  input{width:100%;box-sizing:border-box;background:#11141a;border:1px solid #2c323d;color:#e8eaee;border-radius:9px;padding:12px 13px;font-size:16px;margin-bottom:12px}
+  p{font-size:12px;color:#9aa3b2;margin:0 0 16px;line-height:1.6}
+  input{width:100%;box-sizing:border-box;min-height:44px;background:#11141a;border:1px solid #2c323d;color:#e8eaee;border-radius:9px;padding:11px 13px;font-size:16px;margin-bottom:10px}
   input:focus{outline:none;border-color:#4c8dff}
-  button{width:100%;border:0;border-radius:9px;padding:12px;font-size:14px;font-weight:650;background:#4c8dff;color:#08101f;cursor:pointer}
+  button{width:100%;min-height:44px;border:0;border-radius:9px;padding:11px;font-size:14px;font-weight:650;background:#4c8dff;color:#08101f;cursor:pointer}
   .err{color:#ff8a70;font-size:12px;min-height:16px;margin-bottom:8px}
-  .hint{font-size:11px;color:#5a6473;margin-top:14px;line-height:1.5}
+  .hint{font-size:11px;color:#5a6473;margin-top:12px;line-height:1.5}
+  @media(max-height:520px){form{padding:14px 16px}p{margin-bottom:10px}.hint{margin-top:8px}}
 </style></head><body>
 <form method="POST" action="__login">
   <h1>DeepSeek Harness · 远程访问</h1>

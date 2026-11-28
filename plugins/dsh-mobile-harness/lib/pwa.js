@@ -5,9 +5,25 @@ import { compressBuffer, compressionHeaders, isCompressibleType, MIN_COMPRESS_BY
 // Let backgrounds reach the screen edges; keep interactive content inside the safe rectangle.
 // A legacy skin takes over the insets only after its layout is ready.
 const SAFE_AREA_STYLE = `<style id="dsh-pwa-safe-area">
-html[data-dsh-pwa-ios],html[data-dsh-pwa-ios] body{overscroll-behavior:none}
-html[data-dsh-pwa-ios] body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:#0e1014;pointer-events:none;z-index:2147483647}
+:root{--dsh-sa-top:env(safe-area-inset-top,0px);--dsh-sa-right:env(safe-area-inset-right,0px);--dsh-sa-bottom:env(safe-area-inset-bottom,0px);--dsh-sa-left:env(safe-area-inset-left,0px)}
+html[data-dsh-pwa-ios],html[data-dsh-pwa-ios] body{overscroll-behavior:none;margin:0;width:100%;height:100%;min-height:100dvh;background:var(--dsw-alias-bg-base,#0e1014)}
+html[data-dsh-pwa-ios] body::before{content:"";position:fixed;inset:0 0 auto;height:var(--dsh-sa-top,0px);background:var(--dsw-alias-bg-base,#0e1014);pointer-events:none;z-index:2147483647}
 html:not([data-dru-skin-state="ready"]) #root{box-sizing:border-box;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
+/* iOS home-screen PWA on native layout renders edge-to-edge on #root so backgrounds fill
+   rounded corners and asymmetric side bar regions without white gutters; foreground regions
+   consume each inset edge independently. */
+html[data-dsh-pwa-ios]:not([data-dru-mobile]) #root{padding:0;width:100%;height:100%;min-height:100dvh;background:var(--dsw-alias-bg-base,#0e1014)}
+html[data-dsh-pwa-ios]:not([data-dru-mobile])[data-dsh-pwa-resync] #root{width:var(--dsh-pwa-vw,100vw);height:var(--dsh-pwa-vh,100dvh);min-height:var(--dsh-pwa-vh,100dvh)}
+html[data-dsh-pwa-ios]:not([data-dru-mobile]) [class*="_frame"]{width:100%;height:100%;min-height:100dvh;background:var(--dsw-alias-bg-base,#0e1014)}
+html[data-dsh-pwa-ios]:not([data-dru-mobile])[data-dsh-pwa-resync] [class*="_frame"]{width:var(--dsh-pwa-vw,100vw);height:var(--dsh-pwa-vh,100dvh);min-height:var(--dsh-pwa-vh,100dvh)}
+html[data-dsh-pwa-ios]:not([data-dru-mobile]):not([data-dsh-side-rail]) header[data-window-drag]{padding-top:max(10px,var(--dsh-sa-top));padding-right:calc(28px + var(--dsh-sa-right));padding-left:calc(20px + var(--dsh-sa-left))}
+html[data-dsh-pwa-ios]:not([data-dru-mobile]):not([data-dsh-side-rail]) [data-sidebar-drawer] [class*="_leadingSeat"]{top:max(11px,var(--dsh-sa-top));left:calc(12px + var(--dsh-sa-left))}
+html[data-dsh-pwa-ios]:not([data-dru-mobile]) [class*="_sidebarCol"]{padding-top:var(--dsh-sa-top);padding-bottom:var(--dsh-sa-bottom);padding-left:var(--dsh-sa-left);box-sizing:border-box}
+html[data-dsh-pwa-ios]:not([data-dru-mobile]) [data-conversation-scroll]{padding-left:var(--dsh-sa-left);padding-right:var(--dsh-sa-right);box-sizing:border-box}
+html[data-dsh-pwa-ios]:not([data-dru-mobile]) [data-composer-seat]{padding-left:var(--dsh-sa-left);padding-right:var(--dsh-sa-right);padding-bottom:var(--dsh-sa-bottom);box-sizing:border-box}
+html[data-dsh-pwa-ios]:not([data-dru-mobile])[data-dsh-keyboard="open"] [data-composer-seat]{padding-bottom:0}
+html[data-dsh-pwa-ios]:not([data-dru-mobile]) [data-sidebar-right-panel][data-sidebar-right-open="true"]{padding-top:var(--dsh-sa-top);padding-right:var(--dsh-sa-right);padding-bottom:var(--dsh-sa-bottom);box-sizing:border-box}
+html[data-dsh-pwa-ios]:not([data-dru-mobile]) .dru-page{padding-top:max(20px,var(--dsh-sa-top));padding-right:max(16px,var(--dsh-sa-right));padding-bottom:max(24px,var(--dsh-sa-bottom));padding-left:max(16px,var(--dsh-sa-left))}
 /* Fullscreen on Android keeps platform-reported insets by default. The two
    measured foldable viewports below may use their compact local avoidance. */
 @media(display-mode:fullscreen) and (resolution:3.25dppx) and (349px <= width <= 352px) and (orientation:portrait), (display-mode:fullscreen) and (resolution:3.25dppx) and (690px <= width <= 693px) and (orientation:portrait){
@@ -48,7 +64,7 @@ const HEAD_TAGS = [
   SSE_REV_BRIDGE,
   '<link rel="manifest" href="/__pwa/manifest.webmanifest">',
   '<link rel="apple-touch-icon" sizes="180x180" href="/__pwa/apple-touch-icon.png">',
-  '<meta name="theme-color" content="#0e1014">',
+  '<meta name="theme-color" content="#0e1014" data-dsh-pwa-theme-color>',
   '<meta name="mobile-web-app-capable" content="yes">',
   '<meta name="apple-mobile-web-app-capable" content="yes">',
   '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">',
