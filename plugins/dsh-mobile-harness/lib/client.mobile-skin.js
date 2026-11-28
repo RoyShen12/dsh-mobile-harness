@@ -2,7 +2,7 @@ globalThis.__ModuleLoader__.load({
   id: 'dsh-mobile-harness',
   chunk: 'client.mobile-skin.js',
   factory() {
-const MOBILE_SKIN_VERSION = '2.4.0'
+const MOBILE_SKIN_VERSION = '2.4.1'
 const SIDE_RAIL_KEY = 'dru-side-rail'
 const SIDE_RAIL_MODES = ['auto', 'on', 'off']
 
@@ -206,11 +206,9 @@ function setupNativeEnhance() {
       }
     }
     currentSideRail = sideRail
-
-    // Wide portrait iOS PWA (e.g. iPhone Duo inner portrait 669x951): status glyphs occupy only the
-    // top-right ~125pt corner, leaving >80% of the top band empty if header is pushed down by
-    // safe-area-inset-top. Reclaim the top band and reserve only the top-right corner.
-    cornerStatus = Boolean(!compat && pwa?.iosHomeScreen && !sideRail && saEdge === 'none' && width >= 520 && sa.top >= 20)
+    // Verified on iPhone Duo hardware (iOS 27): touches inside safe-area-inset-* are intercepted by
+    // the OS, so interactive headers and side rails must remain strictly inside the safe rectangle.
+    cornerStatus = false
 
     if (touchMobile) setAttribute(root, 'data-dsh-touch-mobile', '1')
     else root.removeAttribute('data-dsh-touch-mobile')
@@ -221,8 +219,7 @@ function setupNativeEnhance() {
     if (sideRail) setAttribute(root, 'data-dsh-side-rail', sideRail)
     else root.removeAttribute('data-dsh-side-rail')
 
-    if (cornerStatus) setAttribute(root, 'data-dsh-corner-status', '1')
-    else root.removeAttribute('data-dsh-corner-status')
+    root.removeAttribute('data-dsh-corner-status')
 
     if (touchCompact) setAttribute(root, 'data-dsh-dock-compact', dockExpanded ? 'expanded' : 'collapsed')
     else root.removeAttribute('data-dsh-dock-compact')

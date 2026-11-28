@@ -197,11 +197,11 @@ test('native side-rail auto matrix follows Apple HIG across iPhone Duo poses and
   saEdge = 'left'
   context.__dshMobileSkin.refresh()
   assert.equal(attrs.get('data-dsh-side-rail'), 'left')
-  // Inner portrait (669x951, no side bar, top-right status corner): returns to horizontal bar & reclaims top band.
+  // Inner portrait (669x951, no side bar): returns to horizontal bar inside safe-area-inset-top so taps work.
   size = { w: 669, h: 951 }; saEdge = 'none'; saTop = 54
   context.__dshMobileSkin.refresh()
   assert.equal(attrs.has('data-dsh-side-rail'), false)
-  assert.equal(attrs.get('data-dsh-corner-status'), '1')
+  assert.equal(attrs.has('data-dsh-corner-status'), false)
   // Standard tall iPhone (393x852, centered Dynamic Island): stays horizontal and does NOT set corner-status.
   size = { w: 393, h: 852 }; saEdge = 'none'; saTop = 59
   context.__dshMobileSkin.refresh()

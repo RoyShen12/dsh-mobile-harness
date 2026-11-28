@@ -2550,7 +2550,7 @@ html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-
           }
           let disposed = false
           let dispose
-          // Skin 2.4.0: seat side control rail inside Duo 84pt side bar and reclaim inner-portrait top bar.
+          // Skin 2.4.1: keep all interactive controls strictly inside Duo safe area so iOS 27 never blocks taps.
           Promise.all([
             require.async('./client.mobile-skin.js'),
             require.async('./client.mobile-styles.js')

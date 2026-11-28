@@ -8,17 +8,16 @@ const SAFE_AREA_STYLE = `<style id="dsh-pwa-safe-area">
 :root{--dsh-sa-top:env(safe-area-inset-top,0px);--dsh-sa-right:env(safe-area-inset-right,0px);--dsh-sa-bottom:env(safe-area-inset-bottom,0px);--dsh-sa-left:env(safe-area-inset-left,0px)}
 html[data-dsh-pwa-ios],html[data-dsh-pwa-ios] body{overscroll-behavior:none;margin:0;width:100%;height:100%;min-height:100dvh;background:var(--dsw-alias-bg-base,#0e1014)}
 html[data-dsh-pwa-ios] body::before{content:"";position:fixed;inset:0 0 auto;height:var(--dsh-sa-top,0px);background:var(--dsw-alias-bg-base,#0e1014);pointer-events:none;z-index:2147483647}
-html[data-dsh-pwa-ios][data-dsh-corner-status="1"] body::before{display:none}
 html:not([data-dru-skin-state="ready"]) #root{box-sizing:border-box;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
 /* iOS home-screen PWA on native layout renders edge-to-edge on #root so backgrounds fill
-   rounded corners and asymmetric side bar regions without white gutters; foreground regions
-   consume each inset edge independently. */
+   rounded corners and asymmetric side bar regions without white gutters; foreground interactive
+   controls stay inside each safe-area inset because iOS 27 reserves touches outside the safe area. */
 html[data-dsh-pwa-ios]:not([data-dru-mobile]) #root{padding:0;width:100%;height:100%;min-height:100dvh;background:var(--dsw-alias-bg-base,#0e1014)}
 html[data-dsh-pwa-ios]:not([data-dru-mobile])[data-dsh-pwa-resync] #root{width:var(--dsh-pwa-vw,100vw);height:var(--dsh-pwa-vh,100dvh);min-height:var(--dsh-pwa-vh,100dvh)}
 html[data-dsh-pwa-ios]:not([data-dru-mobile]) [class*="_frame"]{width:100%;height:100%;min-height:100dvh;background:var(--dsw-alias-bg-base,#0e1014)}
 html[data-dsh-pwa-ios]:not([data-dru-mobile])[data-dsh-pwa-resync] [class*="_frame"]{width:var(--dsh-pwa-vw,100vw);height:var(--dsh-pwa-vh,100dvh);min-height:var(--dsh-pwa-vh,100dvh)}
-html[data-dsh-pwa-ios]:not([data-dru-mobile]):not([data-dsh-side-rail]):not([data-dsh-corner-status="1"]) header[data-window-drag]{padding-top:max(10px,var(--dsh-sa-top));padding-right:calc(28px + var(--dsh-sa-right));padding-left:calc(20px + var(--dsh-sa-left))}
-html[data-dsh-pwa-ios]:not([data-dru-mobile]):not([data-dsh-side-rail]):not([data-dsh-corner-status="1"]) [data-sidebar-drawer] [class*="_leadingSeat"]{top:max(11px,var(--dsh-sa-top));left:calc(12px + var(--dsh-sa-left))}
+html[data-dsh-pwa-ios]:not([data-dru-mobile]):not([data-dsh-side-rail]) header[data-window-drag]{padding-top:max(8px,var(--dsh-sa-top));padding-right:calc(20px + var(--dsh-sa-right));padding-left:calc(20px + var(--dsh-sa-left))}
+html[data-dsh-pwa-ios]:not([data-dru-mobile]):not([data-dsh-side-rail]) [data-sidebar-drawer] [class*="_leadingSeat"]{top:max(10px,var(--dsh-sa-top));left:calc(12px + var(--dsh-sa-left))}
 html[data-dsh-pwa-ios]:not([data-dru-mobile]) [class*="_sidebarCol"]{padding-top:var(--dsh-sa-top);padding-bottom:var(--dsh-sa-bottom);padding-left:var(--dsh-sa-left);box-sizing:border-box}
 html[data-dsh-pwa-ios]:not([data-dru-mobile]) [data-conversation-scroll]{padding-left:var(--dsh-sa-left);padding-right:var(--dsh-sa-right);box-sizing:border-box}
 html[data-dsh-pwa-ios]:not([data-dru-mobile]) [data-composer-seat]{padding-left:var(--dsh-sa-left);padding-right:var(--dsh-sa-right);padding-bottom:max(4px,calc(var(--dsh-sa-bottom) - 18px));box-sizing:border-box}
