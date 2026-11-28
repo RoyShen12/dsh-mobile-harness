@@ -20,7 +20,7 @@ html[data-dsh-pwa-ios]:not([data-dru-mobile]):not([data-dsh-side-rail]) header[d
 html[data-dsh-pwa-ios]:not([data-dru-mobile]):not([data-dsh-side-rail]) [data-sidebar-drawer] [class*="_leadingSeat"]{top:max(11px,var(--dsh-sa-top));left:calc(12px + var(--dsh-sa-left))}
 html[data-dsh-pwa-ios]:not([data-dru-mobile]) [class*="_sidebarCol"]{padding-top:var(--dsh-sa-top);padding-bottom:var(--dsh-sa-bottom);padding-left:var(--dsh-sa-left);box-sizing:border-box}
 html[data-dsh-pwa-ios]:not([data-dru-mobile]) [data-conversation-scroll]{padding-left:var(--dsh-sa-left);padding-right:var(--dsh-sa-right);box-sizing:border-box}
-html[data-dsh-pwa-ios]:not([data-dru-mobile]) [data-composer-seat]{padding-left:var(--dsh-sa-left);padding-right:var(--dsh-sa-right);padding-bottom:var(--dsh-sa-bottom);box-sizing:border-box}
+html[data-dsh-pwa-ios]:not([data-dru-mobile]) [data-composer-seat]{padding-left:var(--dsh-sa-left);padding-right:var(--dsh-sa-right);padding-bottom:max(4px,calc(var(--dsh-sa-bottom) - 18px));box-sizing:border-box}
 html[data-dsh-pwa-ios]:not([data-dru-mobile])[data-dsh-keyboard="open"] [data-composer-seat]{padding-bottom:0}
 html[data-dsh-pwa-ios]:not([data-dru-mobile]) [data-sidebar-right-panel][data-sidebar-right-open="true"]{padding-top:var(--dsh-sa-top);padding-right:var(--dsh-sa-right);padding-bottom:var(--dsh-sa-bottom);box-sizing:border-box}
 html[data-dsh-pwa-ios]:not([data-dru-mobile]) .dru-page{padding-top:max(20px,var(--dsh-sa-top));padding-right:max(16px,var(--dsh-sa-right));padding-bottom:max(24px,var(--dsh-sa-bottom));padding-left:max(16px,var(--dsh-sa-left))}

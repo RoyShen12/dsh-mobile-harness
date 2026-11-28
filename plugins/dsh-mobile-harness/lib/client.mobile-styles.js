@@ -1321,10 +1321,40 @@ html[data-dsh-touch-compact="1"]:not([data-dru-ui="compat"]) [data-composer-card
 /* Compact dock badge on short touch viewports: keep cost + context visible without truncation; tap to expand. */
 html[data-dsh-dock-compact="collapsed"]:not([data-dru-ui="compat"]) [data-composer-dock] {
   min-height: 20px !important;
+  margin-block-start: 4px !important;
   padding: 1px 6px !important;
   gap: 6px;
   justify-content: center;
   cursor: pointer;
+}
+html[data-dsh-touch-compact="1"]:not([data-dru-ui="compat"]) [data-composer-seat] {
+  background: linear-gradient(180deg, transparent 0%, color-mix(in srgb, var(--dsw-alias-bg-base, #fff) 88%, transparent) 68%, var(--dsw-alias-bg-base, #fff) 100%) !important;
+}
+/* Cap expanded todo-panel height on short screens so it does not swallow half the conversation. */
+html[data-dsh-touch-compact="1"]:not([data-dru-ui="compat"]) [data-composer-seat] section[data-testid="todo-panel"] > div:last-child {
+  max-height: 112px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* iOS WebKit ignores SVG backdrop-filter: url(#lgf-...) from Liquid Glass, leaving glass cards
+   nearly transparent over scrolled text. Provide native CSS frosted blur + legible translucent tint. */
+@supports (-webkit-touch-callout: none) {
+  html:not([data-dru-ui="compat"]) [data-composer-seat] section[data-testid="todo-panel"]::before,
+  html:not([data-dru-ui="compat"]) [data-composer-card]::before,
+  html:not([data-dru-ui="compat"]) [data-composer-dock]::before,
+  html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag]:has([class*="_titleRow"]) {
+    -webkit-backdrop-filter: blur(22px) saturate(1.65) !important;
+    backdrop-filter: blur(22px) saturate(1.65) !important;
+    background-color: color-mix(in srgb, var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base, #fff)) 84%, transparent) !important;
+  }
+}
+html[data-dsh-pwa-ios]:not([data-dru-ui="compat"]) [data-composer-seat] section[data-testid="todo-panel"]::before,
+html[data-dsh-pwa-ios]:not([data-dru-ui="compat"]) [data-composer-card]::before,
+html[data-dsh-pwa-ios]:not([data-dru-ui="compat"]) [data-composer-dock]::before,
+html[data-dsh-pwa-ios][data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag]:has([class*="_titleRow"]) {
+  -webkit-backdrop-filter: blur(22px) saturate(1.65) !important;
+  backdrop-filter: blur(22px) saturate(1.65) !important;
+  background-color: color-mix(in srgb, var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base, #fff)) 84%, transparent) !important;
 }
 html[data-dsh-dock-compact="collapsed"]:not([data-dru-ui="compat"]) [data-composer-dock] [data-composer-stat="activity"],
 html[data-dsh-dock-compact="collapsed"]:not([data-dru-ui="compat"]) [data-composer-dock] [data-composer-stat="usage"],
@@ -1359,7 +1389,7 @@ html[data-dsh-keyboard="open"]:not([data-dru-ui="compat"]) [data-composer-seat] 
 }
 
 /* Phase 3: Apple HIG Side Control Rail for iPhone Duo outer portrait, outer landscape, and inner landscape.
-   Moves top bar controls & view tabs onto a compact 48px vertical capsule along the trailing (or leading)
+   Moves top bar controls & view tabs onto a compact vertical capsule along the trailing (or leading)
    safe-area edge, preserving full vertical height for the conversation stream. */
 html[data-dsh-side-rail]:not([data-dru-ui="compat"]) {
   --dsh-rail-w: 48px;
@@ -1565,26 +1595,57 @@ html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] :i
   }
 }
 
-/* Offset scrollable content asymmetrically away from the side rail and reclaim top 76px.
-   The side rail occupies only the upper ~240px band, so the bottom composer keeps full safe width. */
+/* Offset scrollable message content asymmetrically away from the side rail and reclaim top 76px.
+   Keep the bottom composer full safe-width because the side rail only occupies the upper ~210px. */
 html[data-dsh-side-rail]:not([data-dru-ui="compat"]) [data-conversation-scroll] {
   padding-top: max(8px, var(--dsh-sa-top, 0px)) !important;
+  padding-left: var(--dsh-sa-left, 0px) !important;
+  padding-right: var(--dsh-sa-right, 0px) !important;
   scroll-padding-top: max(12px, var(--dsh-sa-top, 0px));
 }
-html[data-dsh-side-rail="right"]:not([data-dru-ui="compat"]) [data-conversation-scroll] {
-  padding-right: calc(var(--dsh-sa-right, 0px) + var(--dsh-rail-w) + var(--dsh-rail-gap) + 6px) !important;
-  padding-left: var(--dsh-sa-left, 0px) !important;
+html[data-dsh-side-rail="right"]:not([data-dru-ui="compat"]) [data-conversation-scroll] > :not([data-composer-seat]) {
+  padding-right: calc(var(--dsh-rail-w) + var(--dsh-rail-gap) + 6px);
+  box-sizing: border-box;
 }
-html[data-dsh-side-rail="left"]:not([data-dru-ui="compat"]) [data-conversation-scroll] {
-  padding-left: calc(var(--dsh-sa-left, 0px) + var(--dsh-rail-w) + var(--dsh-rail-gap) + 6px) !important;
-  padding-right: var(--dsh-sa-right, 0px) !important;
+html[data-dsh-side-rail="left"]:not([data-dru-ui="compat"]) [data-conversation-scroll] > :not([data-composer-seat]) {
+  padding-left: calc(var(--dsh-rail-w) + var(--dsh-rail-gap) + 6px);
+  box-sizing: border-box;
 }
 html[data-dsh-side-rail]:not([data-dru-ui="compat"]) [data-composer-seat] {
-  padding-left: var(--dsh-sa-left, 0px) !important;
-  padding-right: var(--dsh-sa-right, 0px) !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
 }
 html[data-dsh-side-rail="right"]:not([data-dru-ui="compat"]) [class*="_toBottomSlot"] {
   padding-right: calc(var(--dsh-sa-right, 0px) + 14px) !important;
+}
+@media (max-width: 420px) {
+  html[data-dsh-side-rail]:not([data-dru-ui="compat"]) {
+    --dsh-rail-w: 42px;
+    --dsh-rail-gap: 4px;
+  }
+  html[data-dsh-side-rail]:not([data-dru-ui="compat"]) [data-sidebar-drawer] [data-sidebar-opener] {
+    width: 36px !important;
+    height: 36px !important;
+  }
+  html[data-dsh-side-rail="right"]:not([data-dru-ui="compat"]) [data-sidebar-drawer] [class*="_leadingSeat"] {
+    right: calc(var(--dsh-sa-right, 0px) + var(--dsh-rail-gap) + 3px) !important;
+  }
+  html[data-dsh-side-rail="left"]:not([data-dru-ui="compat"]) [data-sidebar-drawer] [class*="_leadingSeat"] {
+    left: calc(var(--dsh-sa-left, 0px) + var(--dsh-rail-gap) + 3px) !important;
+  }
+  html[data-dsh-side-rail]:not([data-dru-ui="compat"]) [data-sidebar-drawer] header[data-window-drag]:has([class*="_titleRow"]) {
+    padding-top: 44px !important;
+  }
+  html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_tabs"] [role="tab"] {
+    width: 34px !important;
+    min-width: 34px !important;
+    height: 28px !important;
+    font-size: 10px !important;
+  }
+  html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] :is([class*="_headerUtilities"], [class*="_headerCorner"]) button {
+    width: 34px !important;
+    height: 34px !important;
+  }
 }
 html[data-dsh-side-rail]:not([data-dru-ui="compat"])[data-dsh-keyboard="open"] header[data-window-drag]:has([class*="_titleRow"]) {
   max-height: calc(var(--dsh-vv-height, 100dvh) - max(16px, var(--dsh-sa-top, 0px)));

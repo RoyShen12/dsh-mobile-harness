@@ -2,7 +2,7 @@ globalThis.__ModuleLoader__.load({
   id: 'dsh-mobile-harness',
   chunk: 'client.mobile-skin.js',
   factory() {
-const MOBILE_SKIN_VERSION = '2.3.2'
+const MOBILE_SKIN_VERSION = '2.3.4'
 const SIDE_RAIL_KEY = 'dru-side-rail'
 const SIDE_RAIL_MODES = ['auto', 'on', 'off']
 
@@ -193,12 +193,13 @@ function setupNativeEnhance() {
       if (sideRailPref === 'on') {
         sideRail = saEdge === 'left' ? 'left' : 'right'
       } else if (sideRailPref === 'auto') {
-        // Apple HIG for iPhone Duo: move controls to the side on wide-short poses (outer portrait
-        // 466x678, outer landscape 678x466, inner landscape 951x669) or whenever asymmetric side
-        // safe-area is active; return to horizontal bars on tall inner portrait (669x951) and
-        // very narrow windows (<= 419px, e.g. Safari 382px / Split View 385px).
-        const wideShortTouch = isTouch && width >= 420 && height > 0 && height <= 720
-        if (hasAsymmetricSideBar || wideShortTouch) {
+        // Apple HIG for iPhone Duo: move controls to the side on short-height poses (real iPhone Duo
+        // outer portrait PWA exposes ~382x678 while iOS reserves the right ~84pt status strip,
+        // outer landscape ~678x382, inner landscape ~867x669/951x669) or whenever asymmetric side
+        // safe-area is active; keep horizontal bars on tall screens (inner portrait 669x951,
+        // standard iPhones 393x852 / 440x956, iPad portrait).
+        const shortTouch = isTouch && width >= 340 && height > 0 && height <= 700
+        if (hasAsymmetricSideBar || shortTouch) {
           sideRail = saEdge === 'left' ? 'left' : 'right'
         }
       }

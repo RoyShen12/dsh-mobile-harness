@@ -199,14 +199,19 @@ test('native side-rail auto matrix follows Apple HIG across iPhone Duo poses and
   size = { w: 669, h: 951 }; saEdge = 'none'
   context.__dshMobileSkin.refresh()
   assert.equal(attrs.has('data-dsh-side-rail'), false)
-  // Safari outer narrow tab (382x580, no side bar): stays horizontal to preserve reading width.
-  size = { w: 382, h: 580 }; saEdge = 'none'
+  // Standard tall iPhone (393x852, no side bar): stays horizontal.
+  size = { w: 393, h: 852 }; saEdge = 'none'
   context.__dshMobileSkin.refresh()
   assert.equal(attrs.has('data-dsh-side-rail'), false)
-  // User override 'on' forces side rail; 'off' disables it even on Duo outer portrait.
+  // Real iPhone Duo outer PWA (382x678, iOS reserves right status strip outside WebView): activates side rail.
+  size = { w: 382, h: 678 }; saEdge = 'none'
+  context.__dshMobileSkin.refresh()
+  assert.equal(attrs.get('data-dsh-side-rail'), 'right')
+  // User override 'on' forces side rail on tall screen; 'off' disables it even on Duo outer portrait.
+  size = { w: 393, h: 852 }; saEdge = 'none'
   context.__dshMobileSkin.setSideRailPref('on')
   assert.equal(attrs.get('data-dsh-side-rail'), 'right')
-  size = { w: 466, h: 678 }; saEdge = 'right'
+  size = { w: 382, h: 678 }; saEdge = 'none'
   context.__dshMobileSkin.setSideRailPref('off')
   assert.equal(attrs.has('data-dsh-side-rail'), false)
   // Desktop wide fine-pointer stays untouched.
