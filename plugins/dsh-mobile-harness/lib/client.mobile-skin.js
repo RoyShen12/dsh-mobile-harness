@@ -2,7 +2,7 @@ globalThis.__ModuleLoader__.load({
   id: 'dsh-mobile-harness',
   chunk: 'client.mobile-skin.js',
   factory() {
-const MOBILE_SKIN_VERSION = '2.3.4'
+const MOBILE_SKIN_VERSION = '2.3.5'
 const SIDE_RAIL_KEY = 'dru-side-rail'
 const SIDE_RAIL_MODES = ['auto', 'on', 'off']
 

@@ -2550,7 +2550,7 @@ html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-
           }
           let disposed = false
           let dispose
-          // Skin 2.3.4: iPhone Duo 382x678 full-width composer, centered 42px side rail & WebKit frosted glass.
+          // Skin 2.3.5: fix display:contents right-padding bypass while preserving full-width composer.
           Promise.all([
             require.async('./client.mobile-skin.js'),
             require.async('./client.mobile-styles.js')

@@ -1596,24 +1596,29 @@ html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] :i
 }
 
 /* Offset scrollable message content asymmetrically away from the side rail and reclaim top 76px.
-   Keep the bottom composer full safe-width because the side rail only occupies the upper ~210px. */
+   Apply padding on [data-conversation-scroll] itself (bypassing display:contents slot wrappers),
+   and pull the bottom composer back to full safe width with matching negative margin. */
 html[data-dsh-side-rail]:not([data-dru-ui="compat"]) [data-conversation-scroll] {
   padding-top: max(8px, var(--dsh-sa-top, 0px)) !important;
-  padding-left: var(--dsh-sa-left, 0px) !important;
-  padding-right: var(--dsh-sa-right, 0px) !important;
   scroll-padding-top: max(12px, var(--dsh-sa-top, 0px));
 }
-html[data-dsh-side-rail="right"]:not([data-dru-ui="compat"]) [data-conversation-scroll] > :not([data-composer-seat]) {
-  padding-right: calc(var(--dsh-rail-w) + var(--dsh-rail-gap) + 6px);
-  box-sizing: border-box;
+html[data-dsh-side-rail="right"]:not([data-dru-ui="compat"]) [data-conversation-scroll] {
+  padding-right: calc(var(--dsh-sa-right, 0px) + var(--dsh-rail-w) + var(--dsh-rail-gap) + 6px) !important;
+  padding-left: var(--dsh-sa-left, 0px) !important;
 }
-html[data-dsh-side-rail="left"]:not([data-dru-ui="compat"]) [data-conversation-scroll] > :not([data-composer-seat]) {
-  padding-left: calc(var(--dsh-rail-w) + var(--dsh-rail-gap) + 6px);
-  box-sizing: border-box;
+html[data-dsh-side-rail="left"]:not([data-dru-ui="compat"]) [data-conversation-scroll] {
+  padding-left: calc(var(--dsh-sa-left, 0px) + var(--dsh-rail-w) + var(--dsh-rail-gap) + 6px) !important;
+  padding-right: var(--dsh-sa-right, 0px) !important;
 }
 html[data-dsh-side-rail]:not([data-dru-ui="compat"]) [data-composer-seat] {
   padding-left: 0 !important;
   padding-right: 0 !important;
+}
+html[data-dsh-side-rail="right"]:not([data-dru-ui="compat"]) [data-composer-seat] {
+  margin-right: calc(-1 * (var(--dsh-rail-w) + var(--dsh-rail-gap) + 6px)) !important;
+}
+html[data-dsh-side-rail="left"]:not([data-dru-ui="compat"]) [data-composer-seat] {
+  margin-left: calc(-1 * (var(--dsh-rail-w) + var(--dsh-rail-gap) + 6px)) !important;
 }
 html[data-dsh-side-rail="right"]:not([data-dru-ui="compat"]) [class*="_toBottomSlot"] {
   padding-right: calc(var(--dsh-sa-right, 0px) + 14px) !important;
