@@ -2550,7 +2550,7 @@ html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-
           }
           let disposed = false
           let dispose
-          // Skin 2.3.5: fix display:contents right-padding bypass while preserving full-width composer.
+          // Skin 2.4.0: seat side control rail inside Duo 84pt side bar and reclaim inner-portrait top bar.
           Promise.all([
             require.async('./client.mobile-skin.js'),
             require.async('./client.mobile-styles.js')

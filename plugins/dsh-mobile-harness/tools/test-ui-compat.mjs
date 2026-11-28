@@ -150,6 +150,8 @@ test('native side-rail auto matrix follows Apple HIG across iPhone Duo poses and
   let size = { w: 466, h: 678 }
   let coarse = true
   let saEdge = 'right'
+  let saTop = 0
+  let iosHomeScreen = true
   const root = {
     get clientWidth() { return size.w },
     style: { getPropertyValue: () => '', setProperty() {}, removeProperty() {} },
@@ -161,7 +163,7 @@ test('native side-rail auto matrix follows Apple HIG across iPhone Duo poses and
   const context = {
     __ModuleLoader__: { load: (reg) => { factory = reg.factory } },
     __DSH_BOOT__: { release: { version: '0.2.2-rc.5' } },
-    __dshPwa: { getState: () => ({ sideBarEdge: saEdge }) },
+    __dshPwa: { getState: () => ({ sideBarEdge: saEdge, iosHomeScreen, safeArea: { top: saTop, right: saEdge === 'right' ? 84 : 0, bottom: 34, left: saEdge === 'left' ? 84 : 0 } }) },
     Event: class {},
     document: {
       body: {},
@@ -195,14 +197,16 @@ test('native side-rail auto matrix follows Apple HIG across iPhone Duo poses and
   saEdge = 'left'
   context.__dshMobileSkin.refresh()
   assert.equal(attrs.get('data-dsh-side-rail'), 'left')
-  // Inner portrait (669x951, no side bar): returns to horizontal bar per Apple HIG.
-  size = { w: 669, h: 951 }; saEdge = 'none'
+  // Inner portrait (669x951, no side bar, top-right status corner): returns to horizontal bar & reclaims top band.
+  size = { w: 669, h: 951 }; saEdge = 'none'; saTop = 54
   context.__dshMobileSkin.refresh()
   assert.equal(attrs.has('data-dsh-side-rail'), false)
-  // Standard tall iPhone (393x852, no side bar): stays horizontal.
-  size = { w: 393, h: 852 }; saEdge = 'none'
+  assert.equal(attrs.get('data-dsh-corner-status'), '1')
+  // Standard tall iPhone (393x852, centered Dynamic Island): stays horizontal and does NOT set corner-status.
+  size = { w: 393, h: 852 }; saEdge = 'none'; saTop = 59
   context.__dshMobileSkin.refresh()
   assert.equal(attrs.has('data-dsh-side-rail'), false)
+  assert.equal(attrs.has('data-dsh-corner-status'), false)
   // Real iPhone Duo outer PWA (382x678, iOS reserves right status strip outside WebView): activates side rail.
   size = { w: 382, h: 678 }; saEdge = 'none'
   context.__dshMobileSkin.refresh()

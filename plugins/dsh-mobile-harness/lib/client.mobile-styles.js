@@ -1378,6 +1378,22 @@ html[data-dsh-touch-mobile="1"]:not([data-dsh-side-rail]):not([data-dru-ui="comp
   margin-top: 4px;
   gap: 8px 12px;
 }
+/* Reclaim top empty band on wide portrait iOS PWA (e.g. iPhone Duo inner portrait 669x951):
+   system clock/battery only occupies top-right ~125pt, so move header up to y=10px and reserve
+   only the top-right corner instead of pushing the entire bar down by safe-area-inset-top. */
+html[data-dsh-corner-status="1"]:not([data-dsh-side-rail]):not([data-dru-ui="compat"]) header[data-window-drag] {
+  padding-top: 10px !important;
+  padding-right: 140px !important;
+  padding-left: calc(20px + var(--dsh-sa-left, 0px)) !important;
+  padding-bottom: 6px !important;
+}
+html[data-dsh-corner-status="1"]:not([data-dsh-side-rail]):not([data-dru-ui="compat"]) [data-sidebar-drawer] [class*="_leadingSeat"] {
+  top: 11px !important;
+  left: calc(12px + var(--dsh-sa-left, 0px)) !important;
+}
+html[data-dsh-corner-status="1"]:not([data-dsh-side-rail]):not([data-dru-ui="compat"]) [data-conversation-scroll] {
+  padding-top: 72px !important;
+}
 
 /* Native-mode keyboard compaction: reclaim bottom safe area and auxiliary strips. */
 html[data-dsh-keyboard="open"]:not([data-dru-ui="compat"]) [data-composer-dock],
@@ -1623,31 +1639,108 @@ html[data-dsh-side-rail="left"]:not([data-dru-ui="compat"]) [data-composer-seat]
 html[data-dsh-side-rail="right"]:not([data-dru-ui="compat"]) [class*="_toBottomSlot"] {
   padding-right: calc(var(--dsh-sa-right, 0px) + 14px) !important;
 }
+
+/* Native iPhone Duo Side Bar Placement: when the OS exposes the ~84pt asymmetric side safe-area
+   (data-dsh-sa-side="right|left"), seat the vertical control rail INSIDE that side region directly
+   beneath the system clock/battery ring instead of stacking a second column beside it. This fills
+   the empty side strip per Apple HIG and returns 100% of the main width to the conversation. */
+html[data-dsh-side-rail="right"][data-dsh-sa-side="right"]:not([data-dru-ui="compat"]),
+html[data-dsh-side-rail="left"][data-dsh-sa-side="left"]:not([data-dru-ui="compat"]) {
+  --dsh-rail-w: 50px;
+  --dsh-rail-top: 118px;
+}
+@media (max-width: 540px) {
+  html[data-dsh-side-rail="right"][data-dsh-sa-side="right"]:not([data-dru-ui="compat"]),
+  html[data-dsh-side-rail="left"][data-dsh-sa-side="left"]:not([data-dru-ui="compat"]) {
+    /* Outer portrait clock/battery ring sits lower (~85..151pt) below the corner camera. */
+    --dsh-rail-top: 168px;
+  }
+}
+html[data-dsh-side-rail="right"][data-dsh-sa-side="right"]:not([data-dru-ui="compat"]) [data-phase="active"] header[data-window-drag],
+html[data-dsh-side-rail="right"][data-dsh-sa-side="right"]:not([data-dru-ui="compat"]) header[data-window-drag]:has([class*="_titleRow"]) {
+  top: var(--dsh-rail-top) !important;
+  right: max(10px, calc((var(--dsh-sa-right) - var(--dsh-rail-w)) / 2 + 4px)) !important;
+  left: auto !important;
+  max-height: calc(100dvh - var(--dsh-rail-top) - max(16px, var(--dsh-sa-bottom, 0px))) !important;
+  padding: 8px 4px !important;
+  gap: 6px;
+  border-radius: 26px;
+}
+html[data-dsh-side-rail="left"][data-dsh-sa-side="left"]:not([data-dru-ui="compat"]) [data-phase="active"] header[data-window-drag],
+html[data-dsh-side-rail="left"][data-dsh-sa-side="left"]:not([data-dru-ui="compat"]) header[data-window-drag]:has([class*="_titleRow"]) {
+  top: var(--dsh-rail-top) !important;
+  left: max(10px, calc((var(--dsh-sa-left) - var(--dsh-rail-w)) / 2 + 4px)) !important;
+  right: auto !important;
+  max-height: calc(100dvh - var(--dsh-rail-top) - max(16px, var(--dsh-sa-bottom, 0px))) !important;
+  padding: 8px 4px !important;
+  gap: 6px;
+  border-radius: 26px;
+}
+html[data-dsh-side-rail="right"][data-dsh-sa-side="right"]:not([data-dru-ui="compat"]) [data-sidebar-drawer] header[data-window-drag]:has([class*="_titleRow"]),
+html[data-dsh-side-rail="left"][data-dsh-sa-side="left"]:not([data-dru-ui="compat"]) [data-sidebar-drawer] header[data-window-drag]:has([class*="_titleRow"]) {
+  padding-top: 52px !important;
+}
+html[data-dsh-side-rail="right"][data-dsh-sa-side="right"]:not([data-dru-ui="compat"]) [data-sidebar-drawer] [class*="_leadingSeat"] {
+  top: calc(var(--dsh-rail-top) + 6px) !important;
+  right: max(15px, calc((var(--dsh-sa-right) - 40px) / 2 + 4px)) !important;
+  left: auto !important;
+}
+html[data-dsh-side-rail="left"][data-dsh-sa-side="left"]:not([data-dru-ui="compat"]) [data-sidebar-drawer] [class*="_leadingSeat"] {
+  top: calc(var(--dsh-rail-top) + 6px) !important;
+  left: max(15px, calc((var(--dsh-sa-left) - 40px) / 2 + 4px)) !important;
+  right: auto !important;
+}
+html[data-dsh-side-rail="right"][data-dsh-sa-side="right"]:not([data-dru-ui="compat"]) [data-conversation-scroll] {
+  padding-right: var(--dsh-sa-right) !important;
+  padding-left: var(--dsh-sa-left, 0px) !important;
+}
+html[data-dsh-side-rail="left"][data-dsh-sa-side="left"]:not([data-dru-ui="compat"]) [data-conversation-scroll] {
+  padding-left: var(--dsh-sa-left) !important;
+  padding-right: var(--dsh-sa-right, 0px) !important;
+}
+html[data-dsh-side-rail="right"][data-dsh-sa-side="right"]:not([data-dru-ui="compat"]) [data-composer-seat],
+html[data-dsh-side-rail="left"][data-dsh-sa-side="left"]:not([data-dru-ui="compat"]) [data-composer-seat] {
+  margin-right: 0 !important;
+  margin-left: 0 !important;
+}
+html[data-dsh-side-rail="right"][data-dsh-sa-side="right"]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_tabs"] [role="tab"],
+html[data-dsh-side-rail="left"][data-dsh-sa-side="left"]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_tabs"] [role="tab"] {
+  width: 42px !important;
+  min-width: 42px !important;
+  height: 32px !important;
+  font-size: 11px !important;
+}
+html[data-dsh-side-rail="right"][data-dsh-sa-side="right"]:not([data-dru-ui="compat"]) header[data-window-drag] :is([class*="_headerUtilities"], [class*="_headerCorner"]) button,
+html[data-dsh-side-rail="left"][data-dsh-sa-side="left"]:not([data-dru-ui="compat"]) header[data-window-drag] :is([class*="_headerUtilities"], [class*="_headerCorner"]) button {
+  width: 40px !important;
+  height: 40px !important;
+}
+
 @media (max-width: 420px) {
-  html[data-dsh-side-rail]:not([data-dru-ui="compat"]) {
+  html[data-dsh-side-rail]:not([data-dsh-sa-side="right"]):not([data-dsh-sa-side="left"]):not([data-dru-ui="compat"]) {
     --dsh-rail-w: 42px;
     --dsh-rail-gap: 4px;
   }
-  html[data-dsh-side-rail]:not([data-dru-ui="compat"]) [data-sidebar-drawer] [data-sidebar-opener] {
+  html[data-dsh-side-rail]:not([data-dsh-sa-side="right"]):not([data-dsh-sa-side="left"]):not([data-dru-ui="compat"]) [data-sidebar-drawer] [data-sidebar-opener] {
     width: 36px !important;
     height: 36px !important;
   }
-  html[data-dsh-side-rail="right"]:not([data-dru-ui="compat"]) [data-sidebar-drawer] [class*="_leadingSeat"] {
+  html[data-dsh-side-rail="right"]:not([data-dsh-sa-side="right"]):not([data-dru-ui="compat"]) [data-sidebar-drawer] [class*="_leadingSeat"] {
     right: calc(var(--dsh-sa-right, 0px) + var(--dsh-rail-gap) + 3px) !important;
   }
-  html[data-dsh-side-rail="left"]:not([data-dru-ui="compat"]) [data-sidebar-drawer] [class*="_leadingSeat"] {
+  html[data-dsh-side-rail="left"]:not([data-dsh-sa-side="left"]):not([data-dru-ui="compat"]) [data-sidebar-drawer] [class*="_leadingSeat"] {
     left: calc(var(--dsh-sa-left, 0px) + var(--dsh-rail-gap) + 3px) !important;
   }
-  html[data-dsh-side-rail]:not([data-dru-ui="compat"]) [data-sidebar-drawer] header[data-window-drag]:has([class*="_titleRow"]) {
+  html[data-dsh-side-rail]:not([data-dsh-sa-side="right"]):not([data-dsh-sa-side="left"]):not([data-dru-ui="compat"]) [data-sidebar-drawer] header[data-window-drag]:has([class*="_titleRow"]) {
     padding-top: 44px !important;
   }
-  html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_tabs"] [role="tab"] {
+  html[data-dsh-side-rail]:not([data-dsh-sa-side="right"]):not([data-dsh-sa-side="left"]):not([data-dru-ui="compat"]) header[data-window-drag] [class*="_tabs"] [role="tab"] {
     width: 34px !important;
     min-width: 34px !important;
     height: 28px !important;
     font-size: 10px !important;
   }
-  html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] :is([class*="_headerUtilities"], [class*="_headerCorner"]) button {
+  html[data-dsh-side-rail]:not([data-dsh-sa-side="right"]):not([data-dsh-sa-side="left"]):not([data-dru-ui="compat"]) header[data-window-drag] :is([class*="_headerUtilities"], [class*="_headerCorner"]) button {
     width: 34px !important;
     height: 34px !important;
   }

@@ -2,7 +2,7 @@ globalThis.__ModuleLoader__.load({
   id: 'dsh-mobile-harness',
   chunk: 'client.mobile-skin.js',
   factory() {
-const MOBILE_SKIN_VERSION = '2.3.5'
+const MOBILE_SKIN_VERSION = '2.4.0'
 const SIDE_RAIL_KEY = 'dru-side-rail'
 const SIDE_RAIL_MODES = ['auto', 'on', 'off']
 
@@ -174,6 +174,7 @@ function setupNativeEnhance() {
   let currentSideRail = null
   let touchMobile = false
   let touchCompact = false
+  let cornerStatus = false
 
   const sync = () => {
     const compat = compatCanvas()
@@ -182,6 +183,7 @@ function setupNativeEnhance() {
     const forced = forcedUiMode()
     const isTouch = Boolean(coarseQuery?.matches || forced === 'phone' || forced === 'tablet')
     const pwa = globalThis.__dshPwa?.getState?.() || null
+    const sa = pwa?.safeArea || { top: 0, right: 0, bottom: 0, left: 0 }
     const saEdge = pwa?.sideBarEdge || root.getAttribute('data-dsh-sa-side') || 'none'
     const hasAsymmetricSideBar = saEdge === 'right' || saEdge === 'left'
 
@@ -194,10 +196,9 @@ function setupNativeEnhance() {
         sideRail = saEdge === 'left' ? 'left' : 'right'
       } else if (sideRailPref === 'auto') {
         // Apple HIG for iPhone Duo: move controls to the side on short-height poses (real iPhone Duo
-        // outer portrait PWA exposes ~382x678 while iOS reserves the right ~84pt status strip,
-        // outer landscape ~678x382, inner landscape ~867x669/951x669) or whenever asymmetric side
-        // safe-area is active; keep horizontal bars on tall screens (inner portrait 669x951,
-        // standard iPhones 393x852 / 440x956, iPad portrait).
+        // outer portrait PWA exposes ~382x678 / 466x678, outer landscape ~678x382, inner landscape
+        // ~951x669) or whenever asymmetric side safe-area is active; keep horizontal bars on tall
+        // screens (inner portrait 669x951, standard iPhones 393x852 / 440x956, iPad portrait).
         const shortTouch = isTouch && width >= 340 && height > 0 && height <= 700
         if (hasAsymmetricSideBar || shortTouch) {
           sideRail = saEdge === 'left' ? 'left' : 'right'
@@ -205,6 +206,11 @@ function setupNativeEnhance() {
       }
     }
     currentSideRail = sideRail
+
+    // Wide portrait iOS PWA (e.g. iPhone Duo inner portrait 669x951): status glyphs occupy only the
+    // top-right ~125pt corner, leaving >80% of the top band empty if header is pushed down by
+    // safe-area-inset-top. Reclaim the top band and reserve only the top-right corner.
+    cornerStatus = Boolean(!compat && pwa?.iosHomeScreen && !sideRail && saEdge === 'none' && width >= 520 && sa.top >= 20)
 
     if (touchMobile) setAttribute(root, 'data-dsh-touch-mobile', '1')
     else root.removeAttribute('data-dsh-touch-mobile')
@@ -214,6 +220,9 @@ function setupNativeEnhance() {
 
     if (sideRail) setAttribute(root, 'data-dsh-side-rail', sideRail)
     else root.removeAttribute('data-dsh-side-rail')
+
+    if (cornerStatus) setAttribute(root, 'data-dsh-corner-status', '1')
+    else root.removeAttribute('data-dsh-corner-status')
 
     if (touchCompact) setAttribute(root, 'data-dsh-dock-compact', dockExpanded ? 'expanded' : 'collapsed')
     else root.removeAttribute('data-dsh-dock-compact')
@@ -270,6 +279,7 @@ function setupNativeEnhance() {
       sideRailPref,
       touchMobile,
       touchCompact,
+      cornerStatus,
       dockCompact: touchCompact ? (dockExpanded ? 'expanded' : 'collapsed') : null
     }),
     dispose() {
@@ -279,7 +289,7 @@ function setupNativeEnhance() {
       coarseQuery?.removeEventListener?.('change', onResize)
       window.visualViewport?.removeEventListener?.('resize', onResize)
       document.removeEventListener?.('click', onDockClick, true)
-      for (const attr of ['data-dsh-touch-mobile', 'data-dsh-touch-compact', 'data-dsh-side-rail', 'data-dsh-dock-compact']) {
+      for (const attr of ['data-dsh-touch-mobile', 'data-dsh-touch-compact', 'data-dsh-side-rail', 'data-dsh-corner-status', 'data-dsh-dock-compact']) {
         root.removeAttribute(attr)
       }
     }
