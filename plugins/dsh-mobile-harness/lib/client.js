@@ -389,6 +389,8 @@ html[data-dru-mobile][data-dru-layout="compact"] .dru-page{padding-top:64px}
   .dru-button,.dru-seg-btn,.dru-dialog-btn,.dru-tab-btn{min-block-size:44px;padding-inline:12px}
   .dru-input{min-block-size:44px;min-inline-size:0;font-size:16px}
 }
+@media (max-height:700px){
+.dru-page{padding-block:14px 20px}.dru-card{margin-top:12px;padding:12px 14px 14px}}
 @media (max-width:760px){
 /* The macOS frame delegates top-strip clearance to the main panel content. */
 html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-clearance,0px))}}
@@ -854,8 +856,10 @@ html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-
         ? '当前为页面全屏。点击「退出全屏」，或使用系统返回 / Esc / 浏览器退出手势。'
         : state?.ios
           ? state.iosHomeScreen
-            ? '当前从主屏幕启动，浏览器工具栏已隐藏。页面背景延伸到屏幕边缘，控件避开灵动岛、刘海和底部手势区；时间和电量由 iOS 显示。'
-            : '在 Safari 中将此页面添加为主屏幕网页 App，再从图标启动，即可隐藏浏览器工具栏并使用边到边布局。'
+            ? state.sideBarEdge === 'right' || state.sideBarEdge === 'left'
+              ? '当前为 iOS 主屏幕边到边全屏，检测到侧边非对称安全区（如 iPhone Duo 外屏或内屏横屏）。背景铺满整屏，控件自动避让侧边系统栏并释放垂直阅读高度。'
+              : '当前从主屏幕启动，浏览器工具栏已隐藏。页面背景延伸到屏幕边缘，控件按四边安全区独立避让；时间和电量由 iOS 显示。'
+            : '在 Safari 中将此页面添加为主屏幕网页 App，再从图标启动，即可隐藏浏览器工具栏并使用边到边全屏与侧置控件栏。'
           : state?.displayMode === 'fullscreen'
             ? '当前 PWA 以 fullscreen 启动。系统手势可能临时显示状态栏；要结束应用，请使用系统返回或主页。'
             : state?.installed
@@ -872,6 +876,56 @@ html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-
           ? h('p', { className: CLS.fieldTip }, '此浏览器未开放页面全屏，请安装 PWA 后从主屏幕启动。') : null,
         state?.fullscreenError ? h('p', { className: CLS.error, role: 'alert' }, state.fullscreenError) : null,
         h('p', { className: CLS.fieldTip }, '全屏权限仅作用于当前页面。已有主屏幕图标可能仍采用旧的独立窗口模式，待浏览器更新安装信息后重开；必要时从同一地址重新添加。')
+      )
+    }
+
+    /** Local preference for Apple HIG side control rail on wide-short displays (e.g. iPhone Duo). */
+    function SideRailCard({ hidden }) {
+      const [pref, setPref] = useState(() => window.__dshMobileSkin?.getSideRailPref?.() || 'auto')
+      const [activeEdge, setActiveEdge] = useState(() => window.__dshMobileSkin?.getState?.().sideRail || null)
+      useEffect(() => {
+        const update = () => {
+          setPref(window.__dshMobileSkin?.getSideRailPref?.() || 'auto')
+          setActiveEdge(window.__dshMobileSkin?.getState?.().sideRail || null)
+        }
+        update()
+        window.addEventListener('dsh-mobile-pref-change', update)
+        window.addEventListener('dsh-pwa-change', update)
+        window.addEventListener('resize', update)
+        return () => {
+          window.removeEventListener('dsh-mobile-pref-change', update)
+          window.removeEventListener('dsh-pwa-change', update)
+          window.removeEventListener('resize', update)
+        }
+      }, [])
+      const options = [
+        { value: 'auto', label: '自动（推荐）' },
+        { value: 'on', label: '始终开启' },
+        { value: 'off', label: '关闭' }
+      ]
+      const tip = pref === 'auto'
+        ? '在宽矮屏幕或侧边非对称安全区（如 iPhone Duo 外屏、内屏横屏）自动将顶栏与视图切换移到侧边；内屏竖屏与窄窗回归水平顶栏。'
+        : pref === 'on'
+          ? '始终把对话顶栏与视图切换移到屏幕侧边，最大化垂直正文高度。'
+          : '保持水平顶栏，不启用侧置控件栏。'
+      const pick = (mode) => {
+        const next = window.__dshMobileSkin?.setSideRailPref?.(mode) || mode
+        setPref(next)
+        setActiveEdge(window.__dshMobileSkin?.getState?.().sideRail || null)
+      }
+      return h(
+        Card,
+        { title: '侧置控件栏', desc: '按 Apple HIG 将宽矮屏顶栏移到侧边，贴合拇指并释放正文高度', hidden },
+        h(
+          'div',
+          { className: CLS.fields },
+          h(
+            Field,
+            { label: '显示方式', tip },
+            h(Seg, { options, value: pref, onPick: pick }),
+            h('p', { className: CLS.fieldTip }, activeEdge ? `当前状态：已启用（${activeEdge === 'left' ? '左侧' : '右侧'}竖栏），改动即时生效。` : '当前状态：水平顶栏，改动即时生效。')
+          )
+        )
       )
     }
 
@@ -1979,6 +2033,7 @@ html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-
 
         !hostView ? h(PwaInstallCard, { hidden: tab !== 'ui' && tab !== 'connect' }) : null,
         !hostView ? h(PwaImmersiveCard, { hidden: tab !== 'ui' }) : null,
+        !hostView ? h(SideRailCard, { hidden: tab !== 'ui' }) : null,
 
         h(
           Card,
@@ -2495,7 +2550,7 @@ html[data-platform="darwin"] .dru-page{padding-top:max(24px,var(--dsh-frame-top-
           }
           let disposed = false
           let dispose
-          // Skin 2.2.6: reflow the composer by its available width on folding displays.
+          // Skin 2.3.2: iPhone Duo PWA edge-to-edge safe areas, side control rail, full-screen compaction & resume recovery.
           Promise.all([
             require.async('./client.mobile-skin.js'),
             require.async('./client.mobile-styles.js')

@@ -141,3 +141,79 @@ test('native PWA metadata is replaced once while boot release remains readable',
   assert.match(remote, /href="\/__pwa\/manifest.webmanifest"/)
   assert.equal(readHostRelease(remote), '0.2.2-rc.1')
 })
+
+test('native side-rail auto matrix follows Apple HIG across iPhone Duo poses and respects preference', () => {
+  let factory
+  const attrs = new Map()
+  const storage = new Map()
+  const headNodes = []
+  let size = { w: 466, h: 678 }
+  let coarse = true
+  let saEdge = 'right'
+  const root = {
+    get clientWidth() { return size.w },
+    style: { getPropertyValue: () => '', setProperty() {}, removeProperty() {} },
+    getAttribute: (k) => attrs.get(k) ?? null,
+    setAttribute: (k, v) => attrs.set(k, String(v)),
+    removeAttribute: (k) => attrs.delete(k)
+  }
+  const listeners = new Map()
+  const context = {
+    __ModuleLoader__: { load: (reg) => { factory = reg.factory } },
+    __DSH_BOOT__: { release: { version: '0.2.2-rc.5' } },
+    __dshPwa: { getState: () => ({ sideBarEdge: saEdge }) },
+    Event: class {},
+    document: {
+      body: {},
+      head: { appendChild: (el) => headNodes.push(el) },
+      documentElement: root,
+      querySelector: (sel) => sel === 'meta[name="viewport"]' ? { getAttribute: () => 'width=device-width, initial-scale=1' } : null,
+      createElement: () => ({ id: '', textContent: '', remove() {} }),
+      addEventListener() {},
+      removeEventListener() {}
+    },
+    window: {
+      get innerWidth() { return size.w },
+      get innerHeight() { return size.h },
+      localStorage: { getItem: (k) => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v) },
+      matchMedia: (q) => ({ matches: q.includes('coarse') ? coarse : false, addEventListener() {}, removeEventListener() {} }),
+      addEventListener: (k, fn) => listeners.set(k, fn),
+      removeEventListener: (k) => listeners.delete(k),
+      dispatchEvent() {}
+    }
+  }
+  runInNewContext(source, context)
+  const dispose = factory().installMobileSkin('body{}', '.native{}')
+  // Outer portrait PWA (466x678, right safe area): side rail active on right, dock collapsed.
+  assert.equal(attrs.get('data-dsh-side-rail'), 'right')
+  assert.equal(attrs.get('data-dsh-dock-compact'), 'collapsed')
+  // Inner landscape PWA (951x669, right safe area): side rail active on right.
+  size = { w: 951, h: 669 }; saEdge = 'right'
+  context.__dshMobileSkin.refresh()
+  assert.equal(attrs.get('data-dsh-side-rail'), 'right')
+  // Rotated 180deg (left safe area): flips to left.
+  saEdge = 'left'
+  context.__dshMobileSkin.refresh()
+  assert.equal(attrs.get('data-dsh-side-rail'), 'left')
+  // Inner portrait (669x951, no side bar): returns to horizontal bar per Apple HIG.
+  size = { w: 669, h: 951 }; saEdge = 'none'
+  context.__dshMobileSkin.refresh()
+  assert.equal(attrs.has('data-dsh-side-rail'), false)
+  // Safari outer narrow tab (382x580, no side bar): stays horizontal to preserve reading width.
+  size = { w: 382, h: 580 }; saEdge = 'none'
+  context.__dshMobileSkin.refresh()
+  assert.equal(attrs.has('data-dsh-side-rail'), false)
+  // User override 'on' forces side rail; 'off' disables it even on Duo outer portrait.
+  context.__dshMobileSkin.setSideRailPref('on')
+  assert.equal(attrs.get('data-dsh-side-rail'), 'right')
+  size = { w: 466, h: 678 }; saEdge = 'right'
+  context.__dshMobileSkin.setSideRailPref('off')
+  assert.equal(attrs.has('data-dsh-side-rail'), false)
+  // Desktop wide fine-pointer stays untouched.
+  context.__dshMobileSkin.setSideRailPref('auto')
+  coarse = false; size = { w: 1440, h: 900 }; saEdge = 'none'
+  context.__dshMobileSkin.refresh()
+  assert.equal(attrs.has('data-dsh-side-rail'), false)
+  assert.equal(attrs.has('data-dsh-touch-mobile'), false)
+  dispose()
+})

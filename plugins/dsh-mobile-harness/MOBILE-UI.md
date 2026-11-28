@@ -16,11 +16,13 @@
 
 ### iPhone Duo
 
-[Apple 的适配指南](https://developer.apple.com/videos/play/tech-talks/111461/?time=366)建议按可用空间和非对称安全区布局；[WebKit 的 Duo 说明](https://webkit.org/blog/18486/webkit-features-for-safari-27-1/)列出外屏竖、外屏横、内屏竖、内屏横和并排单窗五种常见窗口。Mobile Harness 不按机型、姿态或物理像素切换布局；同一页面随可用宽度重新布局。半折时若浏览器未开放实验性的折姿与分段 API，沿用普通响应式布局，不主动跨折痕分配面板。
+[Apple 的适配指南](https://developer.apple.com/design/human-interface-guidelines/designing-for-iphone-duo)与 [Tech Talk 111462](https://developer.apple.com/videos/play/tech-talks/111462/) 建议按可用空间与非对称安全区布局，并在宽矮屏将顶/底控件移至侧边以保留垂直内容高度；[WebKit 的 Duo 说明](https://webkit.org/blog/18486/webkit-features-for-safari-27-1/)列出外屏竖、外屏横、内屏竖、内屏横和并排单窗五种常见窗口。Mobile Harness 不按机型或物理像素硬编码布局，而按安全区几何与可用宽高实时切换（skin 2.3.2）：
 
-主屏幕网页 App 沿用边到边视口和四边安全区。Safari 标签页的摄像头与侧边系统控件区域由系统保留，网页背景可衔接，交互控件留在浏览器分配的区域内。登录和待确认卡片以安全区内的可用宽度排版，登录页不主动唤起软键盘。
+- **边到边 PWA 与切回自愈**：iOS 主屏幕 PWA 原生模式移除 `#root` 整页安全区 padding，让宿主实时主题底色穿透圆角与非对称侧栏；前景区域独立消费 `--dsh-sa-top/right/bottom/left`，同时去重并同步单一 `<meta name="theme-color">` 与 `<html>` 背景色。`visibilitychange` / `pageshow` / `focus` / `orientationchange` 触发轻量视口自愈，恢复 WebKit 切回 PWA 后偶发的布局缩水与滚动残留。
+- **控件置侧（Side Control Rail）**：在检测到侧边非对称安全区（`data-dsh-sa-side="right|left"`）或宽矮触控视口（如外屏竖屏 466×678、外屏横屏 678×466、内屏横屏 951×669）时，自动将对话顶栏、抽屉入口与视图切换重排为 48px 竖向悬浮胶囊并贴合安全区同侧，释放 76px 顶部高度；内屏竖屏（669×951）与窄窗（如 Safari 382×580、双窗 385×571）自动回归水平顶栏。用户可在「远程 → 界面 → 侧置控件栏」随时切换「自动 / 始终开启 / 关闭」。
+- **全屏空间压缩与输入栏清理**：矮屏下空态输入卡收紧至 81px、底部用量 Dock 折叠为居中紧凑胶囊（点击可展开）、软键盘弹出时归零底部安全区垫高并隐藏辅助栏；空输入时隐藏不可点的提示词优化半透明圆钮，窄屏模型胶囊与录音/发送按钮不再重叠。半折态下通过 `horizontal-viewport-segments: 2` / `vertical-viewport-segments: 2` 渐进避开折痕。
 
-验证：Duo / iOS 27.2 模拟器 Safari 外屏登录页核对了右上挖孔、侧边栏和完整登录卡片。已登录的 Chromium 触屏模拟在同一页面切换 382×580、669×867、951×585、385×571、594×368 并回到外屏，没有检测到输入区或用量栏横向溢出。以上尺寸来自 Safari 标签页基准；Duo 主屏幕安装态、物理折叠/展开、半折与真机键盘尚未实测。
+验证：已登录的远程页（DSH 0.2.2-rc.5，skin 2.3.2）在 Chromium 触屏模拟下实测 466×678、678×466、951×669、669×951、382×580 与 1440×900：外屏竖屏与内屏横屏正文净高占比均升至 83%（原 57%/56%），外屏横屏升至 75%（原 40%），侧置栏无文字裁切、无横向溢出、空态发送按钮旁无透明圆且 382px 无按钮重叠，桌面端零回归；离线测试 43/43 通过。iPhone Duo 物理真机主屏幕 PWA 切后台恢复、真实非对称系统栏取色、折叠/旋转连续切换与真机软键盘仍待真机实测确认。
 
 ## iPad mini / iPad Pro
 

@@ -2,7 +2,9 @@ globalThis.__ModuleLoader__.load({
   id: 'dsh-mobile-harness',
   chunk: 'client.mobile-skin.js',
   factory() {
-const MOBILE_SKIN_VERSION = '2.2.6'
+const MOBILE_SKIN_VERSION = '2.3.2'
+const SIDE_RAIL_KEY = 'dru-side-rail'
+const SIDE_RAIL_MODES = ['auto', 'on', 'off']
 
 const EDGE_SWIPE_ZONE = 64
 const MOBILE_QUERY = '(max-width: 640px), (any-pointer: coarse) and (max-width: 1366px)'
@@ -143,6 +145,146 @@ function hasNativeMobileLayout(version) {
   return !match[4] || Boolean(candidate && Number(candidate[1]) >= 1)
 }
 
+function readSideRailPref() {
+  try {
+    const raw = window.localStorage?.getItem(SIDE_RAIL_KEY)
+    return SIDE_RAIL_MODES.includes(raw) ? raw : 'auto'
+  } catch {
+    return 'auto'
+  }
+}
+
+function writeSideRailPref(mode) {
+  const next = SIDE_RAIL_MODES.includes(mode) ? mode : 'auto'
+  try { window.localStorage?.setItem(SIDE_RAIL_KEY, next) } catch {}
+  return next
+}
+
+/**
+ * Lightweight native-host enhancer (DSH >= 0.2.2-rc.1): manages compact full-screen metrics,
+ * Apple HIG side control rail activation (wide-short displays such as iPhone Duo outer portrait
+ * and inner landscape), dock badge collapse/expand, and keyboard fallback without touching host DOM.
+ */
+function setupNativeEnhance() {
+  const root = document.documentElement
+  if (!root || typeof root.setAttribute !== 'function' || typeof window.addEventListener !== 'function') return null
+  const coarseQuery = typeof window.matchMedia === 'function' ? window.matchMedia('(any-pointer: coarse)') : null
+  let sideRailPref = readSideRailPref()
+  let dockExpanded = false
+  let currentSideRail = null
+  let touchMobile = false
+  let touchCompact = false
+
+  const sync = () => {
+    const compat = compatCanvas()
+    const width = Number(root.clientWidth || window.innerWidth) || 0
+    const height = Math.round(Number(window.visualViewport?.height ?? window.innerHeight) || 0)
+    const forced = forcedUiMode()
+    const isTouch = Boolean(coarseQuery?.matches || forced === 'phone' || forced === 'tablet')
+    const pwa = globalThis.__dshPwa?.getState?.() || null
+    const saEdge = pwa?.sideBarEdge || root.getAttribute('data-dsh-sa-side') || 'none'
+    const hasAsymmetricSideBar = saEdge === 'right' || saEdge === 'left'
+
+    touchMobile = !compat && isTouch && width > 0 && width <= 1024
+    touchCompact = touchMobile && (height <= 740 || width <= 480)
+
+    let sideRail = null
+    if (!compat && width > 0 && width <= 1180) {
+      if (sideRailPref === 'on') {
+        sideRail = saEdge === 'left' ? 'left' : 'right'
+      } else if (sideRailPref === 'auto') {
+        // Apple HIG for iPhone Duo: move controls to the side on wide-short poses (outer portrait
+        // 466x678, outer landscape 678x466, inner landscape 951x669) or whenever asymmetric side
+        // safe-area is active; return to horizontal bars on tall inner portrait (669x951) and
+        // very narrow windows (<= 419px, e.g. Safari 382px / Split View 385px).
+        const wideShortTouch = isTouch && width >= 420 && height > 0 && height <= 720
+        if (hasAsymmetricSideBar || wideShortTouch) {
+          sideRail = saEdge === 'left' ? 'left' : 'right'
+        }
+      }
+    }
+    currentSideRail = sideRail
+
+    if (touchMobile) setAttribute(root, 'data-dsh-touch-mobile', '1')
+    else root.removeAttribute('data-dsh-touch-mobile')
+
+    if (touchCompact) setAttribute(root, 'data-dsh-touch-compact', '1')
+    else root.removeAttribute('data-dsh-touch-compact')
+
+    if (sideRail) setAttribute(root, 'data-dsh-side-rail', sideRail)
+    else root.removeAttribute('data-dsh-side-rail')
+
+    if (touchCompact) setAttribute(root, 'data-dsh-dock-compact', dockExpanded ? 'expanded' : 'collapsed')
+    else root.removeAttribute('data-dsh-dock-compact')
+
+    // Fallback keyboard detection if gateway PWA script was not injected on a direct connection.
+    if (!pwa && window.visualViewport) {
+      const gap = Math.max(0, (window.innerHeight || 0) - height - Math.max(0, Math.round(window.visualViewport.offsetTop || 0)))
+      const kb = Boolean(editableElement(document.activeElement) && gap > 100)
+      if (kb) setAttribute(root, 'data-dsh-keyboard', 'open')
+      else root.removeAttribute('data-dsh-keyboard')
+      setProperty(root, '--dsh-vv-height', `${height}px`)
+    }
+  }
+
+  const onDockClick = (event) => {
+    if (!touchCompact || !(event.target instanceof Element)) return
+    const dock = event.target.closest('[data-composer-dock]')
+    if (!dock) return
+    // Only toggle collapse/expand when tapping empty dock space or when currently collapsed.
+    if (!dockExpanded && !event.target.closest('button')) {
+      dockExpanded = true
+      sync()
+    } else if (dockExpanded && !event.target.closest('button')) {
+      dockExpanded = false
+      sync()
+    }
+  }
+
+  const onResize = () => sync()
+  window.addEventListener('resize', onResize)
+  window.addEventListener('orientationchange', onResize)
+  window.addEventListener('dsh-pwa-change', onResize)
+  coarseQuery?.addEventListener?.('change', onResize)
+  window.visualViewport?.addEventListener?.('resize', onResize)
+  document.addEventListener?.('click', onDockClick, true)
+  sync()
+
+  return {
+    sync,
+    getSideRailPref: () => sideRailPref,
+    setSideRailPref(mode) {
+      sideRailPref = writeSideRailPref(mode)
+      sync()
+      try { window.dispatchEvent(new Event('dsh-mobile-pref-change')) } catch {}
+      return sideRailPref
+    },
+    toggleDock() {
+      dockExpanded = !dockExpanded
+      sync()
+      return dockExpanded
+    },
+    getMeta: () => ({
+      sideRail: currentSideRail,
+      sideRailPref,
+      touchMobile,
+      touchCompact,
+      dockCompact: touchCompact ? (dockExpanded ? 'expanded' : 'collapsed') : null
+    }),
+    dispose() {
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('orientationchange', onResize)
+      window.removeEventListener('dsh-pwa-change', onResize)
+      coarseQuery?.removeEventListener?.('change', onResize)
+      window.visualViewport?.removeEventListener?.('resize', onResize)
+      document.removeEventListener?.('click', onDockClick, true)
+      for (const attr of ['data-dsh-touch-mobile', 'data-dsh-touch-compact', 'data-dsh-side-rail', 'data-dsh-dock-compact']) {
+        root.removeAttribute(attr)
+      }
+    }
+  }
+}
+
 function installMobileSkin(css, nativeComposerCss) {
   if (typeof css !== 'string' || !css) throw new Error('Mobile stylesheet unavailable')
   const query = window.matchMedia(MOBILE_QUERY)
@@ -152,6 +294,7 @@ function installMobileSkin(css, nativeComposerCss) {
   let navFold = null
   let nativeProbe = null
   let composerStyle = null
+  let nativeEnhance = null
   const sync = () => {
     // Unversioned custom builds can publish the native drawer after plugin activation.
     if (!nativeLayout) {
@@ -166,6 +309,10 @@ function installMobileSkin(css, nativeComposerCss) {
         composerStyle.textContent = nativeComposerCss
         document.head.appendChild(composerStyle)
       }
+      if (!nativeEnhance && nativeComposerCss) {
+        nativeEnhance = setupNativeEnhance()
+      }
+      nativeEnhance?.sync()
     }
     const forced = forcedUiMode()
     const want = !nativeLayout && (forced ? forced !== 'compat' : !compatCanvas() && query.matches)
@@ -186,8 +333,12 @@ function installMobileSkin(css, nativeComposerCss) {
       layout: compatCanvas() ? 'compat' : nativeLayout ? 'native' : 'desktop',
       compatibility: nativeLayout ? 'native' : 'inactive',
       hostVersion: hostVersion ?? null,
-      version: MOBILE_SKIN_VERSION
+      version: MOBILE_SKIN_VERSION,
+      ...(nativeEnhance ? nativeEnhance.getMeta() : {})
     },
+    getSideRailPref: () => nativeEnhance?.getSideRailPref() ?? readSideRailPref(),
+    setSideRailPref: (mode) => nativeEnhance ? nativeEnhance.setSideRailPref(mode) : writeSideRailPref(mode),
+    toggleDock: () => nativeEnhance?.toggleDock() ?? false,
     refresh: () => { sync(); activeSkin?.refresh() }
   }
   globalThis.__dshMobileSkin = diagnostics
@@ -200,6 +351,8 @@ function installMobileSkin(css, nativeComposerCss) {
   return () => {
     query.removeEventListener('change', sync)
     nativeProbe?.disconnect()
+    nativeEnhance?.dispose()
+    nativeEnhance = null
     composerStyle?.remove()
     navFold?.()
     navFold = null

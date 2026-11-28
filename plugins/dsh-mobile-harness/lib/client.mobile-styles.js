@@ -1227,6 +1227,9 @@ html[data-dru-mobile][data-dru-skin-state="ready"].dru-overlay-open body {
 }
 `;
     // Use the allocated chat width: safe areas, fold transitions, and side panes can all change it.
+    // Also provides native-mode full-screen space optimization, Apple HIG side control rail for
+    // wide-short displays (e.g. iPhone Duo outer portrait / inner landscape), composer cleanup,
+    // keyboard-state compaction, and progressive viewport-segment posture rules.
     const NATIVE_COMPOSER_CSS = String.raw`
 html:not([data-dru-ui="compat"]) [data-composer-seat] {
   container-name: dsh-mobile-composer;
@@ -1236,17 +1239,23 @@ html:not([data-dru-ui="compat"]) [data-composer-seat] {
   [data-slot="conversation.input.model"] {
     --dsh-composer-model-text-display: block;
     --dsh-composer-model-icon-display: none;
+    flex: 0 1 auto;
+    min-inline-size: 0;
   }
   [data-slot="conversation.input.model"] button {
-    max-inline-size: clamp(64px, calc(100cqi - 190px), 220px);
+    max-inline-size: clamp(64px, calc(100cqi - 204px), 210px);
     padding-inline: 5px;
     gap: 4px;
   }
   [class*="_row"]:has(> [class*="_trailing"] [data-slot="conversation.input.model"]) {
     flex-wrap: nowrap;
+    gap: 6px;
   }
   [class*="_trailing"]:has([data-slot="conversation.input.model"]) {
-    flex-shrink: 1;
+    flex: 1 1 auto;
+    justify-content: flex-end;
+    gap: 6px;
+    min-inline-size: 0;
   }
   [data-slot="conversation.input.model"] > * {
     min-inline-size: 0;
@@ -1267,11 +1276,343 @@ html:not([data-dru-ui="compat"]) [data-composer-seat] {
 }
 @container dsh-mobile-composer (width <= 400px) {
   [data-composer-placeholder] {
-    white-space: normal;
-    overflow-wrap: anywhere;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  :is([data-composer-input], textarea):has(+ [data-composer-placeholder]) {
-    min-block-size: calc(2lh + 11px);
+}
+
+/* Fix phantom semi-transparent disabled circle next to the Send button on touch/mobile screens. */
+html[data-dsh-touch-mobile="1"]:not([data-dru-ui="compat"]) [data-composer-card] .qol-enhance-trigger:disabled:not([aria-expanded="true"]) {
+  display: none !important;
+}
+html[data-dsh-touch-mobile="1"]:not([data-dru-ui="compat"]) [data-composer-card] .qol-enhance-trigger:not(:disabled) {
+  width: 30px;
+  height: 30px;
+  transform: none;
+}
+
+/* Phase 2: Full-screen vertical space optimization on compact / wide-short touch viewports. */
+html[data-dsh-touch-compact="1"]:not([data-dru-ui="compat"]) [data-composer-seat] {
+  --dsh-composer-text-max-height: min(136px, 26dvh);
+  padding-top: 2px;
+}
+html[data-dsh-touch-compact="1"]:not([data-dru-ui="compat"]) [data-composer-card] {
+  padding-top: 4px !important;
+  gap: 2px;
+  border-radius: 22px;
+}
+html[data-dsh-touch-compact="1"]:not([data-dru-ui="compat"]) [data-composer-card] [class*="_scroll"] {
+  min-height: 0 !important;
+}
+html[data-dsh-touch-compact="1"]:not([data-dru-ui="compat"]) [data-composer-input] {
+  min-height: 34px !important;
+  padding-top: 4px !important;
+  padding-bottom: 2px !important;
+}
+html[data-dsh-touch-compact="1"]:not([data-dru-ui="compat"]) [data-composer-card] > [class*="_row"] {
+  padding: 2px 6px 5px !important;
+  gap: 6px;
+}
+html[data-dsh-touch-compact="1"]:not([data-dru-ui="compat"]) [data-composer-card] [class*="_primary"] {
+  transform: none;
+}
+
+/* Compact dock badge on short touch viewports: keep cost + context visible without truncation; tap to expand. */
+html[data-dsh-dock-compact="collapsed"]:not([data-dru-ui="compat"]) [data-composer-dock] {
+  min-height: 20px !important;
+  padding: 1px 6px !important;
+  gap: 6px;
+  justify-content: center;
+  cursor: pointer;
+}
+html[data-dsh-dock-compact="collapsed"]:not([data-dru-ui="compat"]) [data-composer-dock] [data-composer-stat="activity"],
+html[data-dsh-dock-compact="collapsed"]:not([data-dru-ui="compat"]) [data-composer-dock] [data-composer-stat="usage"],
+html[data-dsh-dock-compact="collapsed"]:not([data-dru-ui="compat"]) [data-composer-dock] [data-composer-stat="tokens"] {
+  display: none !important;
+}
+html[data-dsh-dock-compact="collapsed"]:not([data-dru-ui="compat"]) [data-composer-dock] button {
+  height: 20px;
+  min-height: 20px;
+  padding-block: 0;
+  font-size: 11px;
+}
+
+/* Native-mode compact single-row horizontal header when side rail is off (e.g. inner portrait / narrow Safari). */
+html[data-dsh-touch-mobile="1"]:not([data-dsh-side-rail]):not([data-dru-ui="compat"]) header[data-window-drag]:has([class*="_tabs"]) {
+  min-height: 44px;
+  padding-top: max(6px, var(--dsh-sa-top, 0px));
+  padding-bottom: 4px;
+}
+html[data-dsh-touch-mobile="1"]:not([data-dsh-side-rail]):not([data-dru-ui="compat"]) header[data-window-drag] [class*="_tabs"] {
+  margin-top: 4px;
+  gap: 8px 12px;
+}
+
+/* Native-mode keyboard compaction: reclaim bottom safe area and auxiliary strips. */
+html[data-dsh-keyboard="open"]:not([data-dru-ui="compat"]) [data-composer-dock],
+html[data-dsh-keyboard="open"]:not([data-dru-ui="compat"]) [data-composer-seat] section[data-testid="todo-panel"] {
+  display: none !important;
+}
+html[data-dsh-keyboard="open"]:not([data-dru-ui="compat"]) [data-composer-seat] {
+  padding-bottom: 2px !important;
+}
+
+/* Phase 3: Apple HIG Side Control Rail for iPhone Duo outer portrait, outer landscape, and inner landscape.
+   Moves top bar controls & view tabs onto a compact 48px vertical capsule along the trailing (or leading)
+   safe-area edge, preserving full vertical height for the conversation stream. */
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) {
+  --dsh-rail-w: 48px;
+  --dsh-rail-gap: 6px;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) [data-phase="active"] header[data-window-drag],
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag]:has([class*="_titleRow"]) {
+  position: fixed !important;
+  top: max(8px, var(--dsh-sa-top, 0px));
+  bottom: auto;
+  max-height: calc(100dvh - max(16px, var(--dsh-sa-top, 0px) + var(--dsh-sa-bottom, 0px)));
+  width: var(--dsh-rail-w) !important;
+  min-width: var(--dsh-rail-w) !important;
+  min-height: 0 !important;
+  padding: 6px 3px !important;
+  margin: 0 !important;
+  box-sizing: border-box;
+  display: flex !important;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  border: 0.5px solid var(--lg-glass-rim, var(--dsw-alias-border-l2, rgba(255, 255, 255, .14))) !important;
+  border-radius: 24px;
+  background: var(--lg-glass-fill-bar, color-mix(in srgb, var(--dsw-alias-bg-layer-2, #1b1e24) 86%, transparent)) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  backdrop-filter: blur(18px) saturate(1.4);
+  box-shadow: var(--lg-glass-shadow-md, 0 8px 28px rgba(0, 0, 0, .28));
+  z-index: 30;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -webkit-app-region: no-drag;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag]::before {
+  border-radius: inherit;
+}
+html[data-dsh-side-rail="right"]:not([data-dru-ui="compat"]) [data-phase="active"] header[data-window-drag],
+html[data-dsh-side-rail="right"]:not([data-dru-ui="compat"]) header[data-window-drag]:has([class*="_titleRow"]) {
+  right: calc(var(--dsh-sa-right, 0px) + var(--dsh-rail-gap));
+  left: auto !important;
+}
+html[data-dsh-side-rail="left"]:not([data-dru-ui="compat"]) [data-phase="active"] header[data-window-drag],
+html[data-dsh-side-rail="left"]:not([data-dru-ui="compat"]) header[data-window-drag]:has([class*="_titleRow"]) {
+  left: calc(var(--dsh-sa-left, 0px) + var(--dsh-rail-gap));
+  right: auto !important;
+}
+
+/* When drawer mode is active (outer screen), move the native sidebar opener to the top of the side rail. */
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) [data-sidebar-drawer] header[data-window-drag]:has([class*="_titleRow"]) {
+  padding-top: 48px !important;
+}
+html[data-dsh-side-rail="right"]:not([data-dru-ui="compat"]) [data-sidebar-drawer] [class*="_leadingSeat"] {
+  position: fixed !important;
+  top: calc(max(8px, var(--dsh-sa-top, 0px)) + 5px) !important;
+  right: calc(var(--dsh-sa-right, 0px) + var(--dsh-rail-gap) + 4px) !important;
+  left: auto !important;
+  z-index: 36 !important;
+}
+html[data-dsh-side-rail="left"]:not([data-dru-ui="compat"]) [data-sidebar-drawer] [class*="_leadingSeat"] {
+  position: fixed !important;
+  top: calc(max(8px, var(--dsh-sa-top, 0px)) + 5px) !important;
+  left: calc(var(--dsh-sa-left, 0px) + var(--dsh-rail-gap) + 4px) !important;
+  right: auto !important;
+  z-index: 36 !important;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) [data-sidebar-drawer] [data-sidebar-opener] {
+  width: 40px !important;
+  height: 40px !important;
+  border-radius: 999px !important;
+  display: inline-grid;
+  place-items: center;
+}
+
+/* Reflow header children vertically inside the 48px side rail without cloning controls. */
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] :is([class*="_titleRow"], [class*="_titleCluster"], [data-slot="conversation.session.header"]) {
+  display: contents !important;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_headerLeading"]:not(:has(*)) {
+  display: none !important;
+}
+/* Hide long horizontal breadcrumb text inside the vertical rail; keep compact title button when present. */
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_crumbs"] {
+  display: none !important;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_headerActions"] {
+  display: flex !important;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  margin: 0 !important;
+  padding: 0 !important;
+  order: 2;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_headerActions"]:not(:has(button)) {
+  display: none !important;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_headerActions"] > :not(button):not(:has(button)) {
+  display: none !important;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_headerActions"] button {
+  width: 38px !important;
+  min-width: 0 !important;
+  max-width: 38px !important;
+  height: 38px !important;
+  padding: 0 !important;
+  gap: 0 !important;
+  border-radius: 999px;
+  display: inline-grid !important;
+  place-items: center;
+  font-size: 0 !important;
+  overflow: hidden;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_headerActions"] button > span {
+  display: none !important;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_headerActions"] svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+/* View tabs stacked vertically in the middle section of the side rail. */
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_tabs"] {
+  display: flex !important;
+  flex-direction: column;
+  align-items: center;
+  width: 100% !important;
+  margin: 2px 0 !important;
+  padding: 5px 0 !important;
+  gap: 4px !important;
+  border-top: 0.5px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, .24));
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, .24));
+  order: 3;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_tabs"] [role="tablist"] {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center;
+  width: 100%;
+  gap: 3px;
+  padding: 2px !important;
+  border-radius: 16px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_tabs"] [role="tab"] {
+  width: 40px !important;
+  min-width: 40px !important;
+  height: 32px !important;
+  padding: 0 2px !important;
+  margin: 0 !important;
+  border-radius: 12px !important;
+  justify-content: center;
+  font-size: 11px !important;
+  line-height: 1 !important;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_tabs"] [role="tablist"]::after {
+  display: none !important;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_tabs"] [role="tab"][aria-selected="true"] {
+  background: var(--lg-selected-fill, var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, .24))) !important;
+  color: var(--dsw-alias-label-primary) !important;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_tabs"] > button,
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_tabs"] [class*="_viewsMoreAnchor"] button {
+  width: 34px !important;
+  height: 28px !important;
+  border-radius: 999px;
+}
+
+/* Trailing utility & rightbar toggle buttons stacked in the lower section of the side rail. */
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_headerUtilities"],
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_headerCorner"] {
+  display: flex !important;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100%;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_headerCorner"] {
+  order: 4;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_headerUtilities"] {
+  order: 5;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] :is([class*="_headerUtilities"], [class*="_headerCorner"]) button {
+  width: 38px !important;
+  height: 38px !important;
+  border-radius: 999px !important;
+  display: inline-grid;
+  place-items: center;
+}
+@media (max-width: 600px) {
+  html[data-dsh-side-rail]:not([data-dru-ui="compat"]) header[data-window-drag] [class*="_headerUtilities"] button:is([aria-label="分屏"], [title="分屏"], [aria-label="Split"], [title="Split"]) {
+    display: none !important;
+  }
+}
+
+/* Offset scrollable content asymmetrically away from the side rail and reclaim top 76px.
+   The side rail occupies only the upper ~240px band, so the bottom composer keeps full safe width. */
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) [data-conversation-scroll] {
+  padding-top: max(8px, var(--dsh-sa-top, 0px)) !important;
+  scroll-padding-top: max(12px, var(--dsh-sa-top, 0px));
+}
+html[data-dsh-side-rail="right"]:not([data-dru-ui="compat"]) [data-conversation-scroll] {
+  padding-right: calc(var(--dsh-sa-right, 0px) + var(--dsh-rail-w) + var(--dsh-rail-gap) + 6px) !important;
+  padding-left: var(--dsh-sa-left, 0px) !important;
+}
+html[data-dsh-side-rail="left"]:not([data-dru-ui="compat"]) [data-conversation-scroll] {
+  padding-left: calc(var(--dsh-sa-left, 0px) + var(--dsh-rail-w) + var(--dsh-rail-gap) + 6px) !important;
+  padding-right: var(--dsh-sa-right, 0px) !important;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) [data-composer-seat] {
+  padding-left: var(--dsh-sa-left, 0px) !important;
+  padding-right: var(--dsh-sa-right, 0px) !important;
+}
+html[data-dsh-side-rail="right"]:not([data-dru-ui="compat"]) [class*="_toBottomSlot"] {
+  padding-right: calc(var(--dsh-sa-right, 0px) + 14px) !important;
+}
+html[data-dsh-side-rail]:not([data-dru-ui="compat"])[data-dsh-keyboard="open"] header[data-window-drag]:has([class*="_titleRow"]) {
+  max-height: calc(var(--dsh-vv-height, 100dvh) - max(16px, var(--dsh-sa-top, 0px)));
+}
+/* Keep the side rail out of the way while a full-height overlay panel or drawer is open. */
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) [data-sidebar-drawer]:not([data-sidebar-collapsed]) header[data-window-drag],
+html[data-dsh-side-rail]:not([data-dru-ui="compat"]) [data-rightbar-fullscreen]:not([data-rightbar-collapsed]) header[data-window-drag] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Phase 4: Progressive fold-posture displacement when Safari/WebKit exposes Viewport Segments API. */
+@media (horizontal-viewport-segments: 2) {
+  html:not([data-dru-ui="compat"]) .dru-mask {
+    justify-content: flex-end;
+    padding-left: calc(env(viewport-segment-left 1 0, 50vw) + 12px);
+  }
+  html:not([data-dru-ui="compat"]) [role="dialog"][aria-modal="true"] {
+    max-inline-size: calc(env(viewport-segment-width 1 0, 50vw) - 24px);
+  }
+}
+@media (vertical-viewport-segments: 2) {
+  html:not([data-dru-ui="compat"]) [data-conversation-scroll] {
+    padding-bottom: max(12px, calc(100dvh - env(viewport-segment-bottom 0 0, 50dvh)));
+  }
+  html:not([data-dru-ui="compat"]) [data-composer-seat] {
+    min-block-size: min(220px, env(viewport-segment-height 0 1, 35dvh));
+    justify-content: flex-end;
   }
 }
 `;
